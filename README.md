@@ -1,0 +1,25 @@
+# 🚀 KIS-API-Python-Trading-Bot-Example  
+
+## Paper Trading Mode
+
+You can now run the bot without sending real KIS orders by setting the following environment variables in `.env`:
+
+```env
+BROKER_MODE=PAPER
+PAPER_START_CASH=100000
+```
+
+- `BROKER_MODE=PAPER`: switches the broker layer to virtual holdings, virtual executions, and virtual cash.
+- `PAPER_START_CASH`: sets the initial paper cash balance.
+- Paper state is stored in `data/paper_broker_state_<CANO>.json`.
+본 프로젝트는 한국투자증권(KIS) Open API를 활용하여 미국 주식 자동매매 시스템을 구축해보는 파이썬(Python) 예제 코드입니다.  
+이 코드는 증권사 API 통신 방법과 스케줄러 자동화, 텔레그램 봇 제어 등을 학습하기 위한 기술적 레퍼런스로 작성되었습니다.  
+🚨 **원작자 저작권 명시 및 게시 중단(Take-down) 정책 필독**  
+👉 본 코드에 구현된 매매 로직(무한매수법)의 모든 아이디어와 저작권, 지적재산권은 원작자인 '라오어'님에게 있습니다.  
+👉 본 저장소는 순수하게 파이썬과 API를 공부하기 위한 기술적 예제일 뿐이며, 원작자의 공식적인 승인이나 검수를 받은 프로그램이 아닙니다.  
+👉 만약 원작자(라오어님)께서 본 코드의 공유를 원치 않으시거나 삭제를 요청하실 경우, 본 저장소는 어떠한 사전 예고 없이 즉각적으로 삭제(또는 비공개 처리)될 수 있음을 명확히 밝힙니다.  
+⚠️ **면책 조항 (Disclaimer)**  
+👉 이 코드는 한국투자증권 Open API의 기능과 파이썬 자동화 로직을 학습하기 위해 작성된 교육 및 테스트 목적의 순수 예제 코드입니다.  
+👉 특정 투자 전략이나 종목을 추천하거나 투자를 권유하는 목적이 절대 아닙니다.  
+👉 본 코드를 실제 투자에 적용하여 발생하는 모든 금전적 손실 및 시스템 오류에 대한 법적, 도의적 책임은 전적으로 코드를 실행한 사용자 본인에게 있습니다.  
+👉 본 코드는 어떠한 형태의 수익도 보장하지 않으므로, 반드시 충분한 모의 테스트 후 본인의 책임하에 사용하시기 바랍니다.  

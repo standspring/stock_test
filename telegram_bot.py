@@ -121,6 +121,7 @@ class TelegramController:
     def setup_handlers(self, application):
         application.add_handler(CommandHandler("start", self.cmd_start))
         application.add_handler(CommandHandler("sync", self.cmd_sync))
+        application.add_handler(CommandHandler("paper", self.cmd_paper))
         application.add_handler(CommandHandler("record", self.cmd_record))
         application.add_handler(CommandHandler("history", self.cmd_history))
         application.add_handler(CommandHandler("settlement", self.cmd_settlement))
@@ -549,6 +550,69 @@ class TelegramController:
             await self.sync_engine._display_ledger(success_tickers[0], chat_id, context, message_obj=status_msg, pre_fetched_holdings=holdings)
         else:
             await status_msg.edit_text("✅ <b>동기화 완료</b> (표시할 진행 중인 장부가 없거나 에러 대기 중입니다)", parse_mode='HTML')
+
+    async def cmd_paper(self, update, context):
+        if not self._is_admin(update):
+            return
+
+        est = pytz.timezone('US/Eastern')
+        today_str = datetime.datetime.now(est).strftime("%Y%m%d")
+
+        async with self.tx_lock:
+            cash, holdings = await asyncio.to_thread(self.broker.get_account_balance)
+
+        if holdings is None:
+            await update.message.reply_text("??브로커 잔고를 불러오지 못했습니다.")
+            return
+
+        msg = "?? <b>[ Paper Broker ]</b>\n\n"
+        msg += f"?ワ툘 현금: <b>${float(cash or 0.0):,.2f}</b>\n\n"
+
+        msg += "<b>[ Holdings ]</b>\n"
+        holding_lines = []
+        for ticker in sorted((holdings or {}).keys()):
+            item = holdings.get(ticker, {})
+            qty = int(float(item.get('qty') or 0))
+            avg = float(item.get('avg') or 0.0)
+            if qty > 0:
+                holding_lines.append(f"• <b>{ticker}</b> {qty}주 / 평균 ${avg:.4f}")
+        if holding_lines:
+            msg += "\n".join(holding_lines) + "\n\n"
+        else:
+            msg += "보유 종목 없음\n\n"
+
+        msg += "<b>[ Today's Executions ]</b>\n"
+        all_execs = []
+        for ticker in self.cfg.get_active_tickers():
+            try:
+                execs = await asyncio.to_thread(self.broker.get_execution_history, ticker, today_str, today_str)
+            except Exception:
+                execs = []
+
+            for ex in execs or []:
+                raw_time = str(ex.get('ord_tmd') or '000000')
+                side_cd = str(ex.get('sll_buy_dvsn_cd') or '')
+                all_execs.append({
+                    'ticker': ticker,
+                    'time': raw_time,
+                    'side': "BUY" if side_cd == "02" else "SELL",
+                    'qty': int(float(ex.get('ft_ccld_qty') or 0)),
+                    'price': float(ex.get('ft_ccld_unpr3') or 0.0),
+                })
+
+        all_execs.sort(key=lambda x: x['time'], reverse=True)
+
+        if all_execs:
+            for ex in all_execs[:20]:
+                raw_time = ex['time']
+                time_text = f"{raw_time[0:2]}:{raw_time[2:4]}:{raw_time[4:6]}" if len(raw_time) == 6 else raw_time
+                msg += f"• {time_text} <b>{ex['ticker']}</b> {ex['side']} {ex['qty']}주 @ ${ex['price']:.4f}\n"
+            if len(all_execs) > 20:
+                msg += f"\n... 총 {len(all_execs)}건 중 최근 20건만 표시"
+        else:
+            msg += "오늘 체결 내역 없음"
+
+        await update.message.reply_text(msg, parse_mode='HTML')
 
     async def cmd_history(self, update, context):
         if not self._is_admin(update):

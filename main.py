@@ -202,7 +202,7 @@ def main():
     app.bot_data['bot_controller'] = bot
 
     for cmd, handler in [
-        ("start", bot.cmd_start), ("record", bot.cmd_record), ("history", bot.cmd_history),
+        ("start", bot.cmd_start), ("paper", bot.cmd_paper), ("record", bot.cmd_record), ("history", bot.cmd_history),
         ("sync", bot.cmd_sync), ("settlement", bot.cmd_settlement), ("seed", bot.cmd_seed),
         ("ticker", bot.cmd_ticker), ("mode", bot.cmd_mode), ("reset", bot.cmd_reset),
         ("version", bot.cmd_version), ("update", bot.cmd_update)

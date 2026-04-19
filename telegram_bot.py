@@ -562,11 +562,11 @@ class TelegramController:
             cash, holdings = await asyncio.to_thread(self.broker.get_account_balance)
 
         if holdings is None:
-            await update.message.reply_text("??브로커 잔고를 불러오지 못했습니다.")
+            await update.message.reply_text("❌ 브로커 잔고를 불러오지 못했습니다.")
             return
 
-        msg = "?? <b>[ Paper Broker ]</b>\n\n"
-        msg += f"?ワ툘 현금: <b>${float(cash or 0.0):,.2f}</b>\n\n"
+        msg = "🧪 <b>[ Paper Broker ]</b>\n\n"
+        msg += f"▫️ 현금: <b>${float(cash or 0.0):,.2f}</b>\n\n"
 
         msg += "<b>[ Holdings ]</b>\n"
         holding_lines = []

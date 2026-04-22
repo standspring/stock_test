@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 
 from config import ConfigManager
 from broker import KoreaInvestmentBroker
+from paper_broker import PaperBroker
 from strategy import InfiniteStrategy
 from telegram_bot import TelegramController
 
@@ -72,6 +73,12 @@ APP_KEY = os.getenv("APP_KEY")
 APP_SECRET = os.getenv("APP_SECRET")
 CANO = os.getenv("CANO")
 ACNT_PRDT_CD = os.getenv("ACNT_PRDT_CD", "01")
+BROKER_MODE = os.getenv("BROKER_MODE", "REAL").strip().upper()
+
+try:
+    PAPER_START_CASH = float(os.getenv("PAPER_START_CASH", "100000") or "100000")
+except ValueError:
+    PAPER_START_CASH = 100000.0
 
 # 🚨 [수술 완료] ADMIN_CHAT_ID 누락 시 묵언수행(Silent Zombie) 봇 구동 원천 차단
 if not all([TELEGRAM_TOKEN, APP_KEY, APP_SECRET, CANO, ADMIN_CHAT_ID]):

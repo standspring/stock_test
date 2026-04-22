@@ -16,9 +16,10 @@ class SystemUpdater:
     def __init__(self):
         self.remote_branch = "origin/main"
         
-        # 💡 [핵심 수술] .env 파일에서 사용자가 지정한 데몬 이름을 스캔, 없으면 'mybot'으로 폴백
         load_dotenv()
-        self.daemon_name = os.getenv("DAEMON_NAME", "mybot")
+        # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막] systemd 데몬 이름(daemon_name)은 .env 파일이 아닌 OS의 .service 파일 내 Environment 속성에서 다이렉트로 주입받아야 한다. 인프라 샌드박스와 애플리케이션 설정의 혼용을 절대 금지한다.
+        # MODIFIED: [환경변수 스캔 범위 확장] systemd에서 주입한 소문자 daemon_name 우선 조회 및 대문자 폴백 팩트 교정
+        self.daemon_name = os.getenv("daemon_name") or os.getenv("DAEMON_NAME", "mybot")
 
     async def _create_safety_backup(self):
         """

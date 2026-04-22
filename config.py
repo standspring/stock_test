@@ -13,6 +13,7 @@
 # MODIFIED: [V28.26 타임존 락온 그랜드 수술] KST 기준 날짜 연산을 전면 폐기하고,
 # INIT 레코드 기록 및 락(Lock) 해제 등 모든 기준 시간을 EST(미국 동부)로 100% 형변환하여 
 # 타임 패러독스로 인한 스냅샷 매핑 실패 버그를 영구 소각 완료. (EC-3 방어)
+# 🚨 [V28.50 NEW] 사용자 맞춤형 AVWAP 암살자 조기 퇴근 설정(Early Exit/Target) 저장소 완비
 # ==========================================================
 import json
 import os
@@ -57,7 +58,9 @@ class ConfigManager:
             "SPLIT_HISTORY": "data/split_history.json",
             "AVWAP_HYBRID_CFG": "data/avwap_hybrid.json",
             "MANUAL_VWAP_CFG": "data/manual_vwap_config.json",
-            "FEE_CFG": "data/fee_config.json" # NEW: 동적 수수료 저장소 추가
+            "FEE_CFG": "data/fee_config.json", # NEW: 동적 수수료 저장소 추가
+            "AVWAP_EARLY_EXIT_CFG": "data/avwap_early_exit.json",    # 🚨 [V28.50] 조기 퇴근 듀얼 모드 스위치
+            "AVWAP_EARLY_TARGET_CFG": "data/avwap_early_target.json" # 🚨 [V28.50] 조기 퇴근 목표 수익률 저장소
         }
         
         self.DEFAULT_SEED = {"SOXL": 6720.0, "TQQQ": 6720.0}
@@ -354,12 +357,6 @@ class ConfigManager:
             print(f"⚠️ [보안 차단] {ticker}의 장부 기록이 이미 존재하여 파괴적 INIT 덮어쓰기를 차단했습니다.")
             return
             
-        # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 타임존 락온 방어막 (EC-3)]
-        # INIT 장부의 생성 날짜(date 필드)를 기록할 때 KST 기준 시간을 전면 폐기하고
-        # EST(미국 동부) 기준으로 강제 형변환(Lock-on) 완료.
-        # 이 날짜는 get_dynamic_plan에서 해당일 스냅샷 파일(daily_snapshot_REV_YYYY-MM-DD_SOXL.json)을
-        # 로드하는 매핑 키(Mapping Key)로 활용되므로, KST 자정 이후(미국 장중) INIT 기록 시
-        # 스냅샷 키가 +1일 틀어져 지시서 앵커 타점이 증발/오염되는 치명적 버그를 원천 차단함.
         est = pytz.timezone('US/Eastern')
         today_str = datetime.datetime.now(est).strftime('%Y-%m-%d')
         new_id = 1 if not ledger else max(r.get('id', 0) for r in ledger) + 1
@@ -608,7 +605,6 @@ class ConfigManager:
 
             self._save_json(self.FILES["LEDGER"], ledger)
 
-        # MODIFIED: [V28.25] V14 졸업 연산 시 동적 수수료 팩트 역산 적용
         fee_rate = self.get_fee(ticker) / 100.0
         net_invested = raw_total_buy * (1.0 + fee_rate)
         net_revenue = raw_total_sell * (1.0 - fee_rate)
@@ -675,7 +671,6 @@ class ConfigManager:
     def get_split_count(self, t): return self._load_json(self.FILES["SPLIT"], self.DEFAULT_SPLIT).get(t, 40.0)
     def get_target_profit(self, t): return self._load_json(self.FILES["PROFIT_CFG"], self.DEFAULT_TARGET).get(t, 10.0)
         
-    # NEW: [V28.25] 동적 수수료율 Getter/Setter 엔진 이식
     def get_fee(self, t): 
         return float(self._load_json(self.FILES["FEE_CFG"], self.DEFAULT_FEE).get(t, 0.25))
     def set_fee(self, t, v):
@@ -709,6 +704,27 @@ class ConfigManager:
         d = self._load_json(self.FILES["MANUAL_VWAP_CFG"], {})
         d[ticker] = bool(v)
         self._save_json(self.FILES["MANUAL_VWAP_CFG"], d)
+
+    # ==========================================================
+    # 🚨 [V28.50 NEW] AVWAP 암살자 조기 퇴근 듀얼 코어 Getter/Setter
+    # ==========================================================
+    def get_avwap_early_exit_mode(self, ticker): 
+        return self._load_json(self.FILES["AVWAP_EARLY_EXIT_CFG"], {}).get(ticker, False)
+        
+    def set_avwap_early_exit_mode(self, ticker, v):
+        d = self._load_json(self.FILES["AVWAP_EARLY_EXIT_CFG"], {})
+        d[ticker] = bool(v)
+        self._save_json(self.FILES["AVWAP_EARLY_EXIT_CFG"], d)
+
+    def get_avwap_early_target(self, ticker): 
+        # 기본값 2.5(%) 로 설정
+        return float(self._load_json(self.FILES["AVWAP_EARLY_TARGET_CFG"], {}).get(ticker, 2.5))
+        
+    def set_avwap_early_target(self, ticker, v):
+        d = self._load_json(self.FILES["AVWAP_EARLY_TARGET_CFG"], {})
+        d[ticker] = float(v)
+        self._save_json(self.FILES["AVWAP_EARLY_TARGET_CFG"], d)
+    # ==========================================================
 
     def get_secret_mode(self): return self._load_file(self.FILES["SECRET_MODE"]) == 'True'
     def set_secret_mode(self, v): self._save_file(self.FILES["SECRET_MODE"], str(v))

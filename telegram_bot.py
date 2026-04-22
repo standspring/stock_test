@@ -16,6 +16,11 @@
 # MODIFIED: [V28.28 이벤트 루프 직접 차단(Blocking) 원천 방어]
 # /sync 핸들러 내부에서 get_account_balance() 동기 함수가 이벤트 루프를 
 # 영구 점유하던 치명적 버그를 asyncio.to_thread() 래핑으로 완벽 교정.
+# NEW: [V28.31] 하단 고정 키보드 한글 신호 무응답 맹점 완벽 수술 (라우팅 복구)
+# 🚨 [V28.50 NEW] AVWAP 암살자 전용 '조기퇴근/타겟설정' 독립 UI 라우터 개통
+# 🚨 [V29.04 MODIFIED] UI 렌더링 파편화 수술: /history 명령어(cmd_history)의 구형 출력을 최신형 콜백 UI(HIST:LIST)와 100% 동일하게 통일화 완료.
+# 🚨 [V29.05 핵심 수술] 평단가 하방 오염 디커플링: V-REV 지시서(가이던스) 연산 시 한투 평단가(actual_avg) 개입을 영구 차단하고, 큐(Queue) 지층 기반 순수 역산 로직 100% 이식 완료.
+# 🚨 [V29.08 팩트 교정] 장마감(CLOSE) 현재가 출력 수술: 애프터마켓 종료 후에는 실시간 가격($100.25) 대신 '정규장 종가($98.09)'를 현재가(curr)로 강제 고정하여 HTS와 100% 동기화 완료.
 # ==========================================================
 import logging
 import datetime
@@ -121,7 +126,6 @@ class TelegramController:
     def setup_handlers(self, application):
         application.add_handler(CommandHandler("start", self.cmd_start))
         application.add_handler(CommandHandler("sync", self.cmd_sync))
-        application.add_handler(CommandHandler("paper", self.cmd_paper))
         application.add_handler(CommandHandler("record", self.cmd_record))
         application.add_handler(CommandHandler("history", self.cmd_history))
         application.add_handler(CommandHandler("settlement", self.cmd_settlement))
@@ -137,6 +141,9 @@ class TelegramController:
         application.add_handler(CommandHandler("reset", self.cmd_reset))
         application.add_handler(CommandHandler("update", self.cmd_update))
         
+        # 🚨 [V28.50 NEW] 암살자 전용 명령어 신설
+        application.add_handler(CommandHandler("avwap", self.cmd_avwap))
+        
         application.add_handler(CallbackQueryHandler(self.handle_callback))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
 
@@ -144,7 +151,68 @@ class TelegramController:
         await self.callbacks_handler.handle_callback(update, context, self)
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update):
+            return
+            
+        text = update.message.text
+        
+        if "장부 조회" in text:
+            return await self.cmd_record(update, context)
+        elif "시드 변경" in text:
+            return await self.cmd_seed(update, context)
+        elif "모드 전환" in text:
+            return await self.cmd_ticker(update, context)
+        elif "분할 변경" in text or "환경 설정" in text or "세팅" in text:
+            return await self.cmd_settlement(update, context)
+        elif "스나이퍼" in text:
+            return await self.cmd_mode(update, context)
+        elif "명예의 전당" in text or "졸업" in text:
+            return await self.cmd_history(update, context)
+        # 🚨 [V28.50 NEW] 다이렉트 패스에 암살자 키워드 이식
+        elif "암살자" in text or "조기" in text:
+            return await self.cmd_avwap(update, context)
+            
         await self.states_handler.handle_message(update, context, self)
+
+    # 🚨 [V28.50 NEW] 암살자 전용 조기퇴근 UI 라우터
+    async def cmd_avwap(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update):
+            return
+            
+        t = "SOXL"
+        is_hybrid_on = self.cfg.get_avwap_hybrid_mode(t)
+        
+        if not is_hybrid_on:
+            msg = f"⚠️ <b>[AVWAP 암살자 오프라인]</b>\n"
+            msg += f"▫️ 현재 {t}의 AVWAP 하이브리드 모드가 꺼져있습니다.\n"
+            msg += f"▫️ <code>/settlement</code> 메뉴에서 먼저 활성화해주세요."
+            return await update.message.reply_text(msg, parse_mode='HTML')
+
+        early_mode = self.cfg.get_avwap_early_exit_mode(t)
+        early_target = self.cfg.get_avwap_early_target(t)
+        
+        msg = f"🔫 <b>[ {t} AVWAP 암살자 제어 콘솔 ]</b>\n\n"
+        
+        if early_mode:
+            msg += "🏃‍♂️ <b>현재 모드: [조기 퇴근 (사용자 맞춤형)]</b>\n"
+            msg += f"▫️ 장중 시간에 구애받지 않고 <b>+{early_target}%</b> 수익 도달 시 즉각 전량 익절하고 퇴근합니다.\n"
+            msg += "▫️ 장막판 변동성 리스크를 회피하고 일일 수익을 확정 짓는 데 유리합니다.\n"
+        else:
+            msg += "🦅 <b>현재 모드: [오리지널 스퀴즈 타겟팅]</b>\n"
+            msg += "▫️ 수익이 나도 기다렸다가 <b>오후 2시 30분(EST)</b> 이후 발생하는 기관 숏커버링 스퀴즈(+3% 이상)를 노립니다.\n"
+            msg += "▫️ 휩소 장세에서는 종가에 수익을 반납할 리스크가 있습니다.\n"
+
+        keyboard = [
+            [
+                InlineKeyboardButton(f"⚪ 오리지널 모드로 전환" if early_mode else "🎯 오리지널 모드 (현재 적용)", callback_data=f"AVWAP:EARLY:OFF:{t}"),
+                InlineKeyboardButton(f"🎯 조기 퇴근 모드 (현재 적용)" if early_mode else "🏃‍♂️ 조기 퇴근 모드로 전환", callback_data=f"AVWAP:EARLY:ON:{t}")
+            ],
+            [
+                InlineKeyboardButton(f"⚙️ 목표 수익률 설정 (현재: {early_target}%)", callback_data=f"AVWAP:TARGET_SET:{t}")
+            ]
+        ]
+        
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
     async def cmd_update(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update):
@@ -276,7 +344,6 @@ class TelegramController:
             
         await update.message.reply_text("🔄 시장 분석 및 지시서 작성 중...")
         
-        # MODIFIED: [V28.28 이벤트 루프 직접 차단 원천 방어] 동기 블로킹 호출을 asyncio.to_thread로 래핑.
         async with self.tx_lock:
             cash, holdings = await asyncio.to_thread(self.broker.get_account_balance)
             
@@ -330,6 +397,7 @@ class TelegramController:
             
             safe_prev_close = prev_close if prev_close else 0.0
             
+            # 야후 파이낸스 정규장 종가 스캔
             if status_code in ["AFTER", "CLOSE", "PRE"]:
                 try:
                     def get_yf_close():
@@ -340,6 +408,11 @@ class TelegramController:
                         safe_prev_close = yf_close
                 except Exception as e:
                     logging.debug(f"YF 정규장 종가 롤오버 스캔 실패 ({t}): {e}")
+
+            # 🟢 [V29.08 팩트 교정] 장마감(CLOSE) 상태일 경우, 
+            # 애프터마켓 변동 가격을 무시하고 정규장 종가를 현재가로 강제 치환
+            if status_code == "CLOSE":
+                curr = safe_prev_close
 
             idx_ticker = "SOXX" if t == "SOXL" else "QQQ"
             dynamic_pct_obj = await asyncio.to_thread(self.broker.get_dynamic_sniper_target, idx_ticker)
@@ -413,7 +486,10 @@ class TelegramController:
                 
                 tag = "VWAP" if is_manual_vwap else "LOC"
                 
-                if cached_snap and "orders" in cached_snap and logic_qty > 0:
+                # ==========================================================
+                # 🚨 [V29.05 핵심 수술] V-REV 매도가 가이던스(지시서) 100% 디커플링 이식
+                # ==========================================================
+                if cached_snap and "orders" in cached_snap and v_rev_q_qty > 0:
                     sell_idx = 1
                     for o in cached_snap["orders"]:
                         if o.get('side') == 'SELL':
@@ -421,9 +497,15 @@ class TelegramController:
                             sell_idx += 1
                             
                     if not is_manual_vwap:
-                        snap_avg = cached_snap.get('avg_price', actual_avg)
-                        target_jackpot = round(snap_avg * 1.01, 2)
-                        v_rev_guidance += f" 🎯 [전체 잭팟] ${target_jackpot:.2f} 돌파 시 <b>{logic_qty}주</b> (옵션)\n"
+                        if 'avg_price' in cached_snap:
+                            snap_avg = cached_snap['avg_price']
+                        else:
+                            total_q = sum(item.get('qty', 0) for item in q_list)
+                            total_inv = sum(item.get('qty', 0) * item.get('price', 0.0) for item in q_list)
+                            snap_avg = total_inv / total_q if total_q > 0 else 0.0
+                            
+                        target_jackpot = round(snap_avg * 1.01, 2) if snap_avg > 0 else 0.0
+                        v_rev_guidance += f" 🎯 [전체 잭팟] ${target_jackpot:.2f} <b>{logic_qty}주</b> (옵션)\n"
                 
                 elif q_list and logic_qty > 0:
                     l1_qty = q_list[-1].get('qty', 0)
@@ -432,17 +514,20 @@ class TelegramController:
                     target_l1 = round(l1_price * 1.006, 2)
                     v_rev_guidance += f" 🔵 매도1(Pop1) ${target_l1:.2f} <b>{l1_qty}주</b> ({tag})\n"
                     
-                    upper_qty = logic_qty - l1_qty
+                    upper_qty = sum(item.get('qty', 0) for item in q_list[:-1])
                     if upper_qty > 0:
-                        upper_invested = (logic_qty * actual_avg) - (l1_qty * l1_price)
-                        safe_fallback = curr if curr and curr > 0 else actual_avg
-                        upper_avg = upper_invested / upper_qty if upper_invested > 0 and upper_qty > 0 else safe_fallback
+                        upper_invested = sum(item.get('qty', 0) * item.get('price', 0.0) for item in q_list[:-1])
+                        upper_avg = upper_invested / upper_qty
                         
                         target_upper = round(upper_avg * 1.005, 2)
                         v_rev_guidance += f" 🔵 매도2(Pop2) ${target_upper:.2f} <b>{upper_qty}주</b> ({tag})\n"
                         
                     if not is_manual_vwap:
-                        target_jackpot = round(actual_avg * 1.01, 2)
+                        total_q = sum(item.get('qty', 0) for item in q_list)
+                        total_inv = sum(item.get('qty', 0) * item.get('price', 0.0) for item in q_list)
+                        pure_queue_avg = total_inv / total_q if total_q > 0 else 0.0
+                        
+                        target_jackpot = round(pure_queue_avg * 1.01, 2) if pure_queue_avg > 0 else 0.0
                         v_rev_guidance += f" 🎯 [전체 잭팟] ${target_jackpot:.2f} <b>{logic_qty}주</b> (옵션)\n"
                 else:
                     v_rev_guidance += " 🔵 매도: 대기 물량 없음 (관망)\n"
@@ -551,80 +636,37 @@ class TelegramController:
         else:
             await status_msg.edit_text("✅ <b>동기화 완료</b> (표시할 진행 중인 장부가 없거나 에러 대기 중입니다)", parse_mode='HTML')
 
-    async def cmd_paper(self, update, context):
-        if not self._is_admin(update):
-            return
-
-        est = pytz.timezone('US/Eastern')
-        today_str = datetime.datetime.now(est).strftime("%Y%m%d")
-
-        async with self.tx_lock:
-            cash, holdings = await asyncio.to_thread(self.broker.get_account_balance)
-
-        if holdings is None:
-            await update.message.reply_text("❌ 브로커 잔고를 불러오지 못했습니다.")
-            return
-
-        msg = "🧪 <b>[ Paper Broker ]</b>\n\n"
-        msg += f"▫️ 현금: <b>${float(cash or 0.0):,.2f}</b>\n\n"
-
-        msg += "<b>[ Holdings ]</b>\n"
-        holding_lines = []
-        for ticker in sorted((holdings or {}).keys()):
-            item = holdings.get(ticker, {})
-            qty = int(float(item.get('qty') or 0))
-            avg = float(item.get('avg') or 0.0)
-            if qty > 0:
-                holding_lines.append(f"• <b>{ticker}</b> {qty}주 / 평균 ${avg:.4f}")
-        if holding_lines:
-            msg += "\n".join(holding_lines) + "\n\n"
-        else:
-            msg += "보유 종목 없음\n\n"
-
-        msg += "<b>[ Today's Executions ]</b>\n"
-        all_execs = []
-        for ticker in self.cfg.get_active_tickers():
-            try:
-                execs = await asyncio.to_thread(self.broker.get_execution_history, ticker, today_str, today_str)
-            except Exception:
-                execs = []
-
-            for ex in execs or []:
-                raw_time = str(ex.get('ord_tmd') or '000000')
-                side_cd = str(ex.get('sll_buy_dvsn_cd') or '')
-                all_execs.append({
-                    'ticker': ticker,
-                    'time': raw_time,
-                    'side': "BUY" if side_cd == "02" else "SELL",
-                    'qty': int(float(ex.get('ft_ccld_qty') or 0)),
-                    'price': float(ex.get('ft_ccld_unpr3') or 0.0),
-                })
-
-        all_execs.sort(key=lambda x: x['time'], reverse=True)
-
-        if all_execs:
-            for ex in all_execs[:20]:
-                raw_time = ex['time']
-                time_text = f"{raw_time[0:2]}:{raw_time[2:4]}:{raw_time[4:6]}" if len(raw_time) == 6 else raw_time
-                msg += f"• {time_text} <b>{ex['ticker']}</b> {ex['side']} {ex['qty']}주 @ ${ex['price']:.4f}\n"
-            if len(all_execs) > 20:
-                msg += f"\n... 총 {len(all_execs)}건 중 최근 20건만 표시"
-        else:
-            msg += "오늘 체결 내역 없음"
-
-        await update.message.reply_text(msg, parse_mode='HTML')
-
-    async def cmd_history(self, update, context):
+    async def cmd_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update):
             return
             
-        history = self.cfg.get_history()
-        if not history:
-            await update.message.reply_text("📜 저장된 역사가 없습니다.")
+        try:
+            history_data = self.cfg.get_history()
+        except Exception:
+            history_data = []
+            
+        if not history_data:
+            await update.message.reply_text("📭 <b>명예의 전당 (졸업 기록)이 비어있습니다.</b>", parse_mode='HTML')
             return
             
-        msg = "🏆 <b>[ 졸업 명예의 전당 ]</b>\n"
-        keyboard = [[InlineKeyboardButton(f"{h['end_date']} | {h['ticker']} (+${h['profit']:.0f})", callback_data=f"HIST:VIEW:{h['id']}")] for h in history]
+        sorted_hist = sorted(history_data, key=lambda x: x.get('end_date', ''), reverse=True)
+        
+        msg = "🏆 <b>[ 명예의 전당 (과거 졸업 기록) ]</b>\n\n"
+        msg += "상세 내역을 조회할 기록을 선택하세요.\n"
+        
+        keyboard = []
+        
+        for h in sorted_hist[:15]: 
+            t = h.get('ticker', 'UNK')
+            p = h.get('profit', 0.0)
+            date_str = h.get('end_date', '')[:10].replace("-", ".")
+            sign = "+" if p >= 0 else "-"
+            
+            btn_text = f"🏅 {date_str} [{t}] {sign}${abs(p):.2f}"
+            keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"HIST:VIEW:{h['id']}")])
+            
+        keyboard.append([InlineKeyboardButton("❌ 닫기", callback_data="RESET:CANCEL")])
+        
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
     async def cmd_mode(self, update, context):

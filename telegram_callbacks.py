@@ -11,6 +11,13 @@
 # 콜백 데이터에 고유 식별자(ID)가 존재할 경우 해당 과거 지층(History)을 
 # 100% 정밀 타격하여 렌더링하도록 팩트 라우팅 엔진 이식.
 # MODIFIED: [V28.25 그랜드 수술] 동적 수수료율 설정을 위한 INPUT:FEE 콜백 라우팅 분기 신설 완료.
+# MODIFIED: [V28.27] 수동 매도로 인한 0주 락온 디커플링 상태 감지 및 /reset 유도 방어막 추가
+# MODIFIED: [V28.32] 코파일럿 아키텍처 채택: V14 전용 상방 스나이퍼 로직 충돌 방지를 위한 V-REV 락다운 방어막 원상 복구
+# MODIFIED: [V28.33] TQQQ 등 타 종목의 V-REV 횡단 진입 맹점 100% 소각 (SOXL 하드웨어 락온 이식)
+# MODIFIED: [V29.00 NEW] AVWAP 조기 퇴근 모드 동적 렌더링 및 팝업 안내 UX 팩트 수술 완료
+# 🚨 [V29.02 UX 팩트 패치] "역사 목록으로 돌아가기(HIST:LIST)" 콜백 시 cmd_history 호출에 따른 런타임 즉사 맹점 소각. 동적 리스트 렌더링 엔진 단독 이식 완료.
+# 🚨 [V29.03 핫픽스] UnboundLocalError 런타임 즉사 유발 원흉(AVWAP 내부 로컬 임포트 섀도잉) 100% 소각 완료.
+# NEW: [V29.04] queue_ledger.queues 객체 직접 참조 런타임 붕괴 데드코드 전면 소각 및 다이렉트 I/O 멱등성 방어막 이식
 # ==========================================================
 import logging
 import datetime
@@ -21,7 +28,7 @@ import time
 import math
 import asyncio
 import yfinance as yf
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 class TelegramCallbacks:
@@ -276,8 +283,17 @@ class TelegramCallbacks:
                     except Exception:
                         pass
                     
-                if getattr(self, 'queue_ledger', None) and hasattr(self.queue_ledger, 'queues') and ticker in self.queue_ledger.queues:
-                    del self.queue_ledger.queues[ticker]
+                # MODIFIED: [V29.04] queue_ledger.queues 직접 참조 데드코드 100% 소각 및 런타임 붕괴 방어막 이식
+                # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+                # 텔레그램 수동 조작 시 queue_ledger.queues 등 존재하지 않는 내부 속성에 직접 접근하여
+                # 삭제(del)하려는 코드를 절대 부활시키지 마십시오. AttributeError 런타임 붕괴를 유발합니다.
+                # 반드시 파이썬 내장 기능인 open과 json.dump를 이용한 다이렉트 파일 I/O만을 사용하며,
+                # 메모리 갱신이 필요한 경우 아래와 같이 _load()를 호출하여 무결성을 확보하십시오.
+                if getattr(self, 'queue_ledger', None) and hasattr(self.queue_ledger, '_load'):
+                    try:
+                        self.queue_ledger._load()
+                    except Exception:
+                        pass
                     
                 await query.edit_message_text(f"✅ <b>[{ticker}] 삼위일체 소각(Nuke) 및 초기화 완료!</b>\n▫️ 본장부, 백업장부, 큐(Queue), 에스크로의 찌꺼기 데이터가 100% 영구 삭제되었습니다.\n▫️ 다음 매수 진입 시 0주 새출발 디커플링 타점 모드로 완벽히 재시작합니다.", parse_mode='HTML')
             
@@ -323,8 +339,36 @@ class TelegramCallbacks:
                         msg, markup = self.view.create_ledger_dashboard(target['ticker'], qty, avg, invested, sold, safe_trades, 0, 0, is_history=True)
                         
                     await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+            
             elif sub == "LIST":
-                await controller.cmd_history(update, context)
+                try:
+                    history_data = self.cfg.get_history()
+                except Exception:
+                    history_data = []
+                    
+                if not history_data:
+                    await query.edit_message_text("📭 <b>명예의 전당 (졸업 기록)이 비어있습니다.</b>", parse_mode='HTML')
+                    return
+                
+                sorted_hist = sorted(history_data, key=lambda x: x.get('end_date', ''), reverse=True)
+                
+                msg = "🏆 <b>[ 명예의 전당 (과거 졸업 기록) ]</b>\n\n"
+                msg += "상세 내역을 조회할 기록을 선택하세요.\n"
+                keyboard = []
+                
+                for h in sorted_hist[:15]: 
+                    t = h.get('ticker', 'UNK')
+                    p = h.get('profit', 0.0)
+                    date_str = h.get('end_date', '')[:10].replace("-", ".")
+                    sign = "+" if p >= 0 else "-"
+                    
+                    btn_text = f"🏅 {date_str} [{t}] {sign}${abs(p):.2f}"
+                    keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"HIST:VIEW:{h['id']}")])
+                    
+                keyboard.append([InlineKeyboardButton("❌ 닫기", callback_data="RESET:CANCEL")])
+                
+                await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
             elif sub == "IMG":
                 ticker = data[2]
                 
@@ -545,6 +589,10 @@ class TelegramCallbacks:
             ticker = data[2]
             current_ver = self.cfg.get_version(ticker)
             
+            if new_ver == "V_REV" and ticker != "SOXL":
+                await update.callback_query.answer("⚠️ V-REV 모드는 SOXL 전용 아키텍처입니다. 전환이 차단되었습니다.", show_alert=True)
+                return
+
             async with self.tx_lock:
                 _, holdings = self.broker.get_account_balance()
                 
@@ -554,6 +602,13 @@ class TelegramCallbacks:
                 
             kis_qty = int(float(holdings.get(ticker, {}).get('qty', 0)))
             max_qty = self._get_max_holdings_qty(ticker, kis_qty)
+            
+            if kis_qty == 0 and max_qty > 0 and current_ver != new_ver:
+                msg = f"🚨 <b>[ 퀀트 모드 전환 강제 차단: 수동 매도 감지 ]</b>\n\n"
+                msg += f"실잔고는 0주이나 장부에 잔여 수량({max_qty}주)이 남아있어 모드 전환이 차단되었습니다.\n"
+                msg += "증권사 앱에서 수동으로 전량 매도하셨다면, 채팅창에 <code>/reset</code>을 입력하여 장부를 초기화한 후 다시 시도해주세요."
+                await query.edit_message_text(msg, parse_mode='HTML')
+                return
             
             if max_qty > 0 and current_ver != new_ver:
                 msg = f"🚨 <b>[ 퀀트 모드 전환 강제 차단 ]</b>\n\n"
@@ -592,6 +647,10 @@ class TelegramCallbacks:
             
             target_ver = "V_REV" if mode_type in ["AUTO", "MANUAL"] else "V14"
 
+            if target_ver == "V_REV" and ticker != "SOXL":
+                await update.callback_query.answer("⚠️ V-REV 모드는 SOXL 전용 아키텍처입니다. 전환이 차단되었습니다.", show_alert=True)
+                return
+
             async with self.tx_lock:
                 _, holdings = self.broker.get_account_balance()
                 
@@ -601,6 +660,13 @@ class TelegramCallbacks:
                 
             kis_qty = int(float(holdings.get(ticker, {}).get('qty', 0)))
             max_qty = self._get_max_holdings_qty(ticker, kis_qty)
+            
+            if kis_qty == 0 and max_qty > 0 and current_ver != target_ver:
+                msg = f"🚨 <b>[ 퀀트 모드 전환 강제 차단: 수동 매도 감지 ]</b>\n\n"
+                msg += f"실잔고는 0주이나 장부에 잔여 수량({max_qty}주)이 남아있어 모드 전환이 차단되었습니다.\n"
+                msg += "증권사 앱에서 수동으로 전량 매도하셨다면, 채팅창에 <code>/reset</code>을 입력하여 장부를 초기화한 후 다시 시도해주세요."
+                await query.edit_message_text(msg, parse_mode='HTML')
+                return
             
             if max_qty > 0 and current_ver != target_ver:
                 msg = f"🚨 <b>[ 퀀트 모드 전환 강제 차단 ]</b>\n\n"
@@ -640,6 +706,62 @@ class TelegramCallbacks:
                     
                 await query.edit_message_text(f"✅ <b>[{ticker}]</b> 퀀트 엔진이 <b>V14 무매4</b> 모드로 전환되었습니다.\n▫️ <b>집행 방식:</b> {mode_txt}\n▫️ /sync 명령어에서 변경된 지시서를 확인하세요.", parse_mode='HTML')
 
+        elif action == "AVWAP":
+            if sub in ["MENU", "EARLY"]:
+                ticker = data[2] if sub == "MENU" else data[3]
+                
+                if sub == "EARLY":
+                    is_on = (data[2] == "ON")
+                    self.cfg.set_avwap_early_exit_mode(ticker, is_on)
+                
+                is_hybrid_on = self.cfg.get_avwap_hybrid_mode(ticker)
+                
+                if not is_hybrid_on:
+                    await query.answer(f"⚠️ [{ticker}] AVWAP 하이브리드 모드가 꺼져있습니다. 먼저 바로 위 버튼을 눌러 활성화해주세요.", show_alert=True)
+                    return
+                    
+                early_mode = self.cfg.get_avwap_early_exit_mode(ticker)
+                early_target = self.cfg.get_avwap_early_target(ticker)
+                
+                msg = f"🔫 <b>[ {ticker} AVWAP 암살자 제어 콘솔 ]</b>\n\n"
+                
+                if early_mode:
+                    msg += "🏃‍♂️ <b>현재 모드: [조기 퇴근 (사용자 맞춤형)]</b>\n"
+                    msg += f"▫️ 장중 시간에 구애받지 않고 <b>+{early_target}%</b> 수익 도달 시 즉각 전량 익절하고 퇴근합니다.\n"
+                    msg += "▫️ 장막판 변동성 리스크를 회피하고 일일 수익을 확정 짓는 데 유리합니다.\n"
+                else:
+                    msg += "🦅 <b>현재 모드: [오리지널 스퀴즈 타겟팅]</b>\n"
+                    msg += "▫️ 수익이 나도 기다렸다가 <b>오후 2시 30분(EST)</b> 이후 발생하는 기관 숏커버링 스퀴즈(+3% 이상)를 노립니다.\n"
+                    msg += "▫️ 휩소 장세에서는 종가에 수익을 반납할 리스크가 있습니다.\n"
+
+                keyboard = [
+                    [
+                        InlineKeyboardButton(f"⚪ 오리지널 모드로 전환" if early_mode else "🎯 오리지널 모드 (현재 적용)", callback_data=f"AVWAP:EARLY:OFF:{ticker}"),
+                        InlineKeyboardButton(f"🎯 조기 퇴근 모드 (현재 적용)" if early_mode else "🏃‍♂️ 조기 퇴근 모드로 전환", callback_data=f"AVWAP:EARLY:ON:{ticker}")
+                    ]
+                ]
+                
+                if early_mode:
+                    keyboard.append([
+                        InlineKeyboardButton(f"⚙️ 목표 수익률 설정 (현재: {early_target}%)", callback_data=f"AVWAP:TARGET_SET:{ticker}")
+                    ])
+                
+                keyboard.append([InlineKeyboardButton("❌ 콘솔 닫기", callback_data="RESET:CANCEL")])
+                
+                await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+            elif sub == "TARGET_SET":
+                ticker = data[2]
+                controller.user_states[update.effective_chat.id] = f"AVWAP_TARGET_{ticker}"
+                
+                await query.answer("👇 확인을 누르시고, 화면 맨 아래 채팅창에 목표 수익률(숫자)을 쳐주세요!", show_alert=True)
+                
+                await context.bot.send_message(
+                    update.effective_chat.id, 
+                    f"⚙️ <b>[{ticker}] 조기 퇴근 목표 수익률(%)을 입력하세요.</b>\n▫️ 숫자만 입력 (예: 2.5 또는 3.0)",
+                    parse_mode='HTML'
+                )
+
         elif action == "MODE":
             mode_val = sub
             ticker = data[2] if len(data) > 2 else "SOXL"
@@ -664,7 +786,7 @@ class TelegramCallbacks:
             if current_ver == "V_REV" and mode_val == "ON":
                 await query.answer(f"🚨 {current_ver} 모드에서는 로직 충돌 방지를 위해 상방 스나이퍼를 켤 수 없습니다!", show_alert=True)
                 return
-                
+
             self.cfg.set_upward_sniper_mode(ticker, mode_val == "ON")
             await query.edit_message_text(f"✅ <b>[{ticker}]</b> 상방 스나이퍼 모드 변경 완료: {'🎯 ON (가동중)' if mode_val == 'ON' else '⚪ OFF (대기중)'}", parse_mode='HTML')
             
@@ -689,7 +811,6 @@ class TelegramCallbacks:
                 ko_name = "자동 복리율(%)"
             elif sub == "STOCK_SPLIT":
                 ko_name = "액면 분할/병합 비율 (예: 10분할은 10, 10병합은 0.1)"
-            # NEW: [V28.25] 텔레그램 수수료 텍스트 입력 프롬프트 동적 출력
             elif sub == "FEE":
                 ko_name = "증권사 수수료율(%)"
             else:

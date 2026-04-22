@@ -1,13 +1,16 @@
 # ==========================================================
-# [scheduler_trade.py] - 🌟 100% 통합 무결점 완성본 (Full Version) 🌟
-# MODIFIED: [V28.18 V14 오리지널 스냅샷 저장 배선 개통]
-# 1) 17:05 정규장 스케줄러(scheduled_regular_trade) 내 V14 모드 분기에서
-#    새로 이식된 v14_plugin.save_daily_snapshot() 함수를 호출하도록 배선 추가.
-# NEW: [V28.21 스냅샷 소각 맹점 적출 및 디커플링 무결성 확보]
-# 애프터마켓 스케줄러(16:05 EST) 내부의 스냅샷 강제 삭제(os.remove) 로직을 전면 영구 적출.
-# 0주 새출발 당일 매수 성공 후 /sync 조회 시 매도 가이던스가 노출되는 UI 오염 버그를
-# 스냅샷 영구 보존(익일 17:05 원자적 덮어쓰기)으로 완벽히 차단함.
-# NEW: [V28.22 AI 환각 방어 백신 이식] VWAP 디커플링 로직에 AI 에이전트 오판 차단 경고 주석 하드코딩
+# [scheduler_trade.py] - 🌟 100% 통합 무결점 완성본 (V29.03) 🌟
+# ⚠️ 이 주석 및 파일명 표기는 절대 지우지 마세요.
+# MODIFIED: [V28.18] V14 오리지널 스냅샷 저장 배선 개통
+# NEW: [V28.21] 스냅샷 소각 맹점 적출 및 디커플링 무결성 확보
+# NEW: [V28.33] 코파일럿 아키텍처 채택: V14 상방 스나이퍼 100% 통합
+# 🛠️ [V28.35] VWAP/스나이퍼 잔고 스캔 리스트([]) 유입 타입 세이프 쉴드 이식
+# 🚀 [V28.36 API 병목 영구 적출] 미체결 명단 소멸 시 '100% 전량 체결' 간주. 타임아웃 원천 차단!
+# 🛡️ [V28.37] 스윕 피니셔 발화 후 '잔고 증발' 오발탄 원천 차단: sweep_msg_sent 플래그 교차 참조 바이패스 가드 이식 (sniper_monitor + vwap_trade 2중 수술)
+# MODIFIED: [V28.41] U_CURVE_WEIGHTS 배열 합산 불일치(0.9596)로 인한 예산 누수 버그 완벽 수술 (합산 1.0 멱등성 동기화)
+# 🚨 [V28.50 NEW] AVWAP 조기퇴근 모드(Early Exit) 파이프라인 배선 개통 및 타겟 수익률 팩트 캐스팅
+# 🚨 [V28.51 팩트 수술] 정규장 스케줄러 통신 지연(가짜 에러) 진단망 이식: 재시도 루프 시 첫 실패 사유(fail_reason 및 예외 타입)를 텔레그램으로 즉시 타전하여 원격 진단 100% 개통.
+# 🚨 [V29.03 팩트 수술] AVWAP 영속성(Persistence) 듀얼 캐시 동기화 이식 완료: GCP 서버 재부팅(Amnesia) 시 json 파일에서 과거 상태를 자가 복구(Self-Healing)하고 팩트 매매를 즉시 재개하는 파이프라인 완벽 개통.
 # ==========================================================
 import os
 import logging
@@ -78,20 +81,64 @@ async def scheduled_sniper_monitor(context):
         async with tx_lock:
             cash, holdings = await asyncio.to_thread(broker.get_account_balance)
             if holdings is None: return
+            
+            safe_holdings = holdings if isinstance(holdings, dict) else {}
             avwap_free_cash = cash
             
             for t in cfg.get_active_tickers():
                 version = cfg.get_version(t)
                 
                 if version == "V_REV":
+                    h = safe_holdings.get(t) or {}
+                    actual_qty = int(float(h.get('qty', 0)))
+                    q_ledger = app_data.get('queue_ledger')
+                    if q_ledger:
+                        q_data = q_ledger.get_queue(t)
+                        total_q = sum(item.get("qty", 0) for item in q_data)
+                        
+                        if actual_qty == 0 and total_q > 0:
+                            _vwap_cache_ref = app_data.get('vwap_cache', {})
+                            if _vwap_cache_ref.get(f"REV_{t}_sweep_msg_sent"):
+                                continue
+                                
+                            if not tracking_cache.get(f"REV_{t}_panic_sell_warn"):
+                                tracking_cache[f"REV_{t}_panic_sell_warn"] = True
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text=f"🚨 <b>[비상] [{t}] 뇌동매매로 인한 잔고 증발이 감지되었습니다.</b>\n"
+                                         f"▫️ 봇의 매매가 일시 정지됩니다.\n"
+                                         f"▫️ 시드 오염을 막기 위해 즉시 <code>/reset</code> 커맨드를 실행하여 장부를 소각하십시오.",
+                                    parse_mode='HTML'
+                                )
+                            continue
+                
+                if version == "V_REV":
                     if not cfg.get_avwap_hybrid_mode(t): continue
+                    
+                    # 🚨 [V29.03 수술 부위] 기억상실(Amnesia) 복구 로직 이식
+                    if not tracking_cache.get(f"AVWAP_INIT_{t}"):
+                        try:
+                            saved_state = strategy.v_avwap_plugin.load_state(t, now_est)
+                            if saved_state:
+                                tracking_cache[f"AVWAP_BOUGHT_{t}"] = saved_state.get('bought', False)
+                                tracking_cache[f"AVWAP_SHUTDOWN_{t}"] = saved_state.get('shutdown', False)
+                                tracking_cache[f"AVWAP_QTY_{t}"] = saved_state.get('qty', 0)
+                                tracking_cache[f"AVWAP_AVG_{t}"] = saved_state.get('avg_price', 0.0)
+                        except Exception as e:
+                            logging.error(f"AVWAP 상태 복구 실패: {e}")
+                        tracking_cache[f"AVWAP_INIT_{t}"] = True
+                        
                     if tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"): continue
                     
                     target_base = base_map.get(t, t)
                     
-                    if f"AVWAP_CTX_{t}" not in tracking_cache:
+                    # NEW: ctx_data 결측 시 None 캐시 오염(당일 영구 동결) 방어 루프
+                    if f"AVWAP_CTX_{t}" not in tracking_cache or tracking_cache[f"AVWAP_CTX_{t}"] is None:
                         ctx_data = await asyncio.to_thread(strategy.fetch_avwap_macro, target_base)
-                        tracking_cache[f"AVWAP_CTX_{t}"] = ctx_data
+                        if ctx_data is not None:
+                            tracking_cache[f"AVWAP_CTX_{t}"] = ctx_data
+                        else:
+                            continue # 결측 시 다음 분봉에서 재시도 (SHUTDOWN 차단)
                     
                     ctx_data = tracking_cache.get(f"AVWAP_CTX_{t}")
                     avwap_qty = tracking_cache.get(f"AVWAP_QTY_{t}", 0)
@@ -106,44 +153,238 @@ async def scheduled_sniper_monitor(context):
                     base_day_open, _ = await asyncio.to_thread(broker.get_day_high_low, target_base)
                     base_day_open = float(base_day_open or 0.0)
                     
+                    # NEW: 당일 시가 결측 시 수학적 오발탄(SHUTDOWN) 방지
+                    if base_day_open <= 0:
+                        continue 
+                    
                     df_1min_base = None
                     try: df_1min_base = await asyncio.to_thread(broker.get_1min_candles_df, target_base)
                     except: pass
                     
+                    early_exit_mode = cfg.get_avwap_early_exit_mode(t)
+                    early_target_profit = cfg.get_avwap_early_target(t) / 100.0
+                    
                     decision = strategy.get_avwap_decision(
-                        target_base, t, base_curr_p, exec_curr_p, base_day_open, avwap_avg, avwap_qty, avwap_free_cash, ctx_data, df_1min_base, now_est
+                        target_base, t, base_curr_p, exec_curr_p, base_day_open, avwap_avg, avwap_qty, avwap_free_cash, ctx_data, df_1min_base, now_est,
+                        early_exit_mode=early_exit_mode, early_target_profit=early_target_profit
                     )
                     
                     action, reason = decision.get('action'), decision.get('reason')
                     
                     if action == 'SHUTDOWN':
                         tracking_cache[f"AVWAP_SHUTDOWN_{t}"] = True
+                        
+                        strategy.v_avwap_plugin.save_state(t, now_est, {
+                            'shutdown': True,
+                            'bought': tracking_cache.get(f"AVWAP_BOUGHT_{t}", False),
+                            'qty': avwap_qty,
+                            'avg_price': avwap_avg
+                        })
+                        
                         await context.bot.send_message(chat_id=chat_id, text=f"🛑 <b>[{t}] 하이브리드 AVWAP 당일 작전 종료</b>\n▫️ 사유: {reason}", parse_mode='HTML')
                         
                     elif action == 'BUY' and not tracking_cache.get(f"AVWAP_BOUGHT_{t}"):
                         b_qty = decision.get('qty', 0)
                         if b_qty > 0:
                             ask_p = float(await asyncio.to_thread(broker.get_ask_price, t) or exec_curr_p)
-                            res = broker.send_order(t, "BUY", b_qty, ask_p, "LIMIT")
-                            if res.get('rt_cd') == '0':
-                                tracking_cache[f"AVWAP_BOUGHT_{t}"], tracking_cache[f"AVWAP_QTY_{t}"], tracking_cache[f"AVWAP_AVG_{t}"] = True, b_qty, ask_p
-                                committed = b_qty * ask_p
-                                avwap_free_cash = max(0.0, avwap_free_cash - committed)
+                            # MODIFIED: 비동기 병목 해소
+                            res = await asyncio.to_thread(broker.send_order, t, "BUY", b_qty, ask_p, "LIMIT")
+                            odno = res.get('odno', '')
+                            
+                            if res.get('rt_cd') == '0' and odno:
+                                # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+                                # BUY 주문 전송 후 미체결 붕괴를 막기 위한 8초 교차 스캔 이식.
+                                # 체결된 수량(ccld_qty)만 AVWAP 캐시에 기록하며, 이 물량은 V-REV 본대 장부와 절대 섞이지 않음.
+                                ccld_qty = 0
+                                for _ in range(4):
+                                    await asyncio.sleep(2.0)
+                                    unfilled_check = await asyncio.to_thread(broker.get_unfilled_orders_detail, t)
+                                    safe_unfilled = unfilled_check if isinstance(unfilled_check, list) else []
+                                    
+                                    my_order = next((ox for ox in safe_unfilled if ox.get('odno') == odno), None)
+                                    if my_order:
+                                        ccld_qty = int(float(my_order.get('tot_ccld_qty') or 0))
+                                    else:
+                                        ccld_qty = b_qty
+                                        break
                                 
-                                await context.bot.send_message(chat_id=chat_id, text=f"🎯 <b>[{t}] 하이브리드 AVWAP 딥매수 작렬!</b>\n▫️ 수량: {b_qty}주 / 단가: ${ask_p:.2f}", parse_mode='HTML')
+                                if ccld_qty < b_qty:
+                                    try:
+                                        await asyncio.to_thread(broker.cancel_order, t, odno)
+                                        await asyncio.sleep(0.5)
+                                    except: pass
+                                
+                                if ccld_qty > 0:
+                                    tracking_cache[f"AVWAP_BOUGHT_{t}"] = True
+                                    tracking_cache[f"AVWAP_QTY_{t}"] = ccld_qty
+                                    tracking_cache[f"AVWAP_AVG_{t}"] = ask_p
+                                    
+                                    strategy.v_avwap_plugin.save_state(t, now_est, {
+                                        'shutdown': tracking_cache.get(f"AVWAP_SHUTDOWN_{t}", False),
+                                        'bought': True,
+                                        'qty': ccld_qty,
+                                        'avg_price': ask_p
+                                    })
+                                    
+                                    committed = ccld_qty * ask_p
+                                    avwap_free_cash = max(0.0, avwap_free_cash - committed)
+                                    
+                                    await context.bot.send_message(chat_id=chat_id, text=f"🎯 <b>[{t}] 하이브리드 AVWAP 딥매수 작렬!</b>\n▫️ 체결 수량: {ccld_qty}주 / 단가: ${ask_p:.2f}", parse_mode='HTML')
                     
                     elif action == 'SELL' and avwap_qty > 0:
                         bid_p = float(await asyncio.to_thread(broker.get_bid_price, t) or exec_curr_p)
-                        res = broker.send_order(t, "SELL", avwap_qty, bid_p, "LIMIT")
-                        if res.get('rt_cd') == '0':
-                            tracking_cache[f"AVWAP_SHUTDOWN_{t}"], tracking_cache[f"AVWAP_QTY_{t}"], tracking_cache[f"AVWAP_AVG_{t}"] = True, 0, 0.0
-                            await context.bot.send_message(chat_id=chat_id, text=f"🏆 <b>[{t}] 하이브리드 AVWAP 독립물량 청산 완료!</b>", parse_mode='HTML')
+                        # MODIFIED: 비동기 병목 해소
+                        res = await asyncio.to_thread(broker.send_order, t, "SELL", avwap_qty, bid_p, "LIMIT")
+                        odno = res.get('odno', '')
+                        
+                        if res.get('rt_cd') == '0' and odno:
+                            # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+                            # SELL 주문 전송 후 미체결 붕괴를 막기 위한 8초 교차 스캔 이식.
+                            ccld_qty = 0
+                            for _ in range(4):
+                                await asyncio.sleep(2.0)
+                                unfilled_check = await asyncio.to_thread(broker.get_unfilled_orders_detail, t)
+                                safe_unfilled = unfilled_check if isinstance(unfilled_check, list) else []
+                                
+                                my_order = next((ox for ox in safe_unfilled if ox.get('odno') == odno), None)
+                                if my_order:
+                                    ccld_qty = int(float(my_order.get('tot_ccld_qty') or 0))
+                                else:
+                                    ccld_qty = avwap_qty
+                                    break
+                            
+                            if ccld_qty < avwap_qty:
+                                try:
+                                    await asyncio.to_thread(broker.cancel_order, t, odno)
+                                    await asyncio.sleep(0.5)
+                                except: pass
+                            
+                            if ccld_qty > 0:
+                                remain_qty = max(0, avwap_qty - ccld_qty)
+                                tracking_cache[f"AVWAP_QTY_{t}"] = remain_qty
+                                
+                                if remain_qty == 0:
+                                    tracking_cache[f"AVWAP_SHUTDOWN_{t}"] = True
+                                    tracking_cache[f"AVWAP_AVG_{t}"] = 0.0
+                                
+                                strategy.v_avwap_plugin.save_state(t, now_est, {
+                                    'shutdown': tracking_cache.get(f"AVWAP_SHUTDOWN_{t}", False),
+                                    'bought': tracking_cache.get(f"AVWAP_BOUGHT_{t}", False),
+                                    'qty': remain_qty,
+                                    'avg_price': tracking_cache.get(f"AVWAP_AVG_{t}", 0.0)
+                                })
+                                
+                                if 'EARLY_PROFIT_TAKE' in reason:
+                                    await context.bot.send_message(chat_id=chat_id, text=f"🏃‍♂️ <b>[{t}] 하이브리드 AVWAP 조기 퇴근 완료! (체결: {ccld_qty}주)</b>\n▫️ 설정된 타겟 수익률 달성으로 지정가 익절 덤핑 후 매매를 종료합니다. 🏆", parse_mode='HTML')
+                                else:
+                                    await context.bot.send_message(chat_id=chat_id, text=f"🏆 <b>[{t}] 하이브리드 AVWAP 독립물량 청산 완료! (체결: {ccld_qty}주)</b>\n▫️ 사유: {reason}", parse_mode='HTML')
                     continue
+
+                if version != "V14":
+                    continue
+                if not cfg.get_upward_sniper_mode(t):
+                    continue
+                if tracking_cache.get(f"V14_{t}_sniper_done"):
+                    continue
+
+                h = safe_holdings.get(t) or {}
+                actual_qty = int(float(h.get('qty', 0)))
+                actual_avg = float(h.get('avg', 0.0))
+                if actual_qty <= 0 or actual_avg <= 0:
+                    continue
+
+                v14_snap = None
+                try:
+                    if hasattr(strategy, 'v14_plugin') and hasattr(strategy.v14_plugin, 'load_daily_snapshot'):
+                        v14_snap = strategy.v14_plugin.load_daily_snapshot(t)
+                except Exception:
+                    pass
+
+                star_price = float(v14_snap.get('star_price', 0.0)) if v14_snap else 0.0
+                target_ratio = cfg.get_target_profit(t) / 100.0
+                target_price = math.ceil(actual_avg * (1 + target_ratio) * 100) / 100.0
+                
+                sniper_floor = max(star_price, actual_avg * 1.005)
+                
+                exec_curr_p = float(await asyncio.to_thread(broker.get_current_price, t) or 0.0)
+                if exec_curr_p <= 0:
+                    continue
+
+                day_high, _ = await asyncio.to_thread(broker.get_day_high_low, t)
+                day_high = float(day_high or exec_curr_p)
+                
+                tracking_status = tracking_cache.setdefault(t, {})
+                tracking_status['day_high'] = day_high
+                tracking_status['sniper_floor'] = sniper_floor
+                tracking_status['target_price'] = target_price
+
+                if exec_curr_p >= target_price:
+                    bid_p = float(await asyncio.to_thread(broker.get_bid_price, t) or exec_curr_p)
+                    await asyncio.to_thread(broker.cancel_all_orders_safe, t, "SELL")
+                    await asyncio.sleep(0.5)
+                    
+                    # MODIFIED: 비동기 병목 해소
+                    res = await asyncio.to_thread(broker.send_order, t, "SELL", actual_qty, bid_p, "LIMIT")
+                    if res.get('rt_cd') == '0':
+                        tracking_cache[f"V14_{t}_sniper_done"] = True
+                        cfg.set_lock(t, "SNIPER_SELL")
+                        try:
+                            if hasattr(strategy, 'v14_plugin') and hasattr(strategy.v14_plugin, '_mark_quarter_sell_completed'):
+                                strategy.v14_plugin._mark_quarter_sell_completed(t)
+                        except Exception: pass
+                        
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"🎯 <b>[{t}] 잭팟 목표가(${target_price:.2f}) 돌파! 전량 익절 격발!</b>\n"
+                                 f"▫️ 전량 {actual_qty}주 → 매도가: ${bid_p:.2f}",
+                            parse_mode='HTML'
+                        )
+                    continue
+
+                if day_high >= sniper_floor:
+                    tracking_status['is_trailing'] = True
+                    
+                    if not tracking_cache.get(f"V14_{t}_armed_msg"):
+                        tracking_cache[f"V14_{t}_armed_msg"] = True
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"🦅 <b>[{t}] 스나이퍼 락온(Armed)!</b>\n▫️ 가격이 ${sniper_floor:.2f}를 돌파했습니다. 트레일링 익절 감시를 시작합니다.",
+                            parse_mode='HTML'
+                        )
+                        
+                    pullback_threshold = day_high * (1 - 0.015) 
+                    
+                    if exec_curr_p <= pullback_threshold:
+                        sell_qty = min(actual_qty, math.ceil(actual_qty / 4))
+                        if sell_qty <= 0:
+                            continue
+                            
+                        bid_p = float(await asyncio.to_thread(broker.get_bid_price, t) or exec_curr_p)
+                        await asyncio.to_thread(broker.cancel_all_orders_safe, t, "SELL")
+                        await asyncio.sleep(0.5)
+                        
+                        # MODIFIED: 비동기 병목 해소
+                        res = await asyncio.to_thread(broker.send_order, t, "SELL", sell_qty, bid_p, "LIMIT")
+                        if res.get('rt_cd') == '0':
+                            tracking_cache[f"V14_{t}_sniper_done"] = True
+                            cfg.set_lock(t, "SNIPER_SELL")
+                            try:
+                                if hasattr(strategy, 'v14_plugin') and hasattr(strategy.v14_plugin, '_mark_quarter_sell_completed'):
+                                    strategy.v14_plugin._mark_quarter_sell_completed(t)
+                            except Exception: pass
+                            
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=f"🦅 <b>[{t}] 스나이퍼 쿼터 익절 작렬!</b>\n"
+                                     f"▫️ 최고가(${day_high:.2f}) 대비 1.5% 하락 감지\n"
+                                     f"▫️ 물량 {sell_qty}주 → 매도가: ${bid_p:.2f}",
+                                parse_mode='HTML'
+                            )
 
     try:
         await asyncio.wait_for(_do_sniper(), timeout=45.0)
     except Exception as e:
-        logging.error(f"🚨 스나이퍼 타임아웃 에러: {e}")
+        logging.error(f"🚨 스나이퍼 타임아웃 에러: {e}", exc_info=True)
 
 # ==========================================================
 # 2. 🛡️ Fail-Safe: 선제적 LOC 취소 (VWAP 엔진 기상과 동기화 완료)
@@ -200,13 +441,13 @@ async def scheduled_vwap_init_and_cancel(context):
                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', disable_notification=True)
                             await asyncio.sleep(1.0)
                         except Exception as e:
-                            logging.error(f"🚨 Fail-Safe 초기화(Nuke) 에러: {e}")
+                            logging.error(f"🚨 Fail-Safe 초기화(Nuke) 에러: {e}", exc_info=True)
                             vwap_cache[f"REV_{t}_nuked"] = False 
                     
     try:
         await asyncio.wait_for(_do_init(), timeout=45.0)
     except Exception as e:
-        logging.error(f"🚨 Fail-Safe 타임아웃 에러: {e}")
+        logging.error(f"🚨 Fail-Safe 타임아웃 에러: {e}", exc_info=True)
 
 # ==========================================================
 # 3. 🎯 VWAP 1분 단위 정밀 타격 엔진
@@ -249,7 +490,7 @@ async def scheduled_vwap_trade(context):
     U_CURVE_WEIGHTS = [
         0.0308, 0.0220, 0.0190, 0.0228, 0.0179, 0.0191, 0.0199, 0.0190, 0.0187, 0.0213,
         0.0216, 0.0234, 0.0231, 0.0210, 0.0205, 0.0252, 0.0225, 0.0228, 0.0238, 0.0229,
-        0.0259, 0.0284, 0.0331, 0.0385, 0.0400, 0.0461, 0.0553, 0.0620, 0.0750, 0.1180
+        0.0259, 0.0284, 0.0331, 0.0385, 0.0400, 0.0461, 0.0553, 0.0620, 0.0750, 0.1584
     ]
     
     minutes_to_close = int(max(0, (market_close - now_est).total_seconds()) / 60)
@@ -262,6 +503,8 @@ async def scheduled_vwap_trade(context):
         async with tx_lock:
             cash, holdings = await asyncio.to_thread(broker.get_account_balance)
             if holdings is None: return
+            
+            safe_holdings = holdings if isinstance(holdings, dict) else {}
             
             for t in cfg.get_active_tickers():
                 version = cfg.get_version(t)
@@ -282,7 +525,7 @@ async def scheduled_vwap_trade(context):
                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', disable_notification=True)
                             await asyncio.sleep(1.0)
                         except Exception as e:
-                            logging.error(f"🚨 자가 치유 Nuke 실패: {e}")
+                            logging.error(f"🚨 자가 치유 Nuke 실패: {e}", exc_info=True)
                             continue
 
                     curr_p = float(await asyncio.to_thread(broker.get_current_price, t) or 0.0)
@@ -300,18 +543,29 @@ async def scheduled_vwap_trade(context):
                         queue_ledger = app_data.get('queue_ledger')
                         if not strategy_rev or not queue_ledger: continue
                         
+                        h = safe_holdings.get(t) or {}
+                        actual_qty = int(float(h.get('qty', 0)))
+                        
                         q_data = queue_ledger.get_queue(t)
                         total_q = sum(item.get("qty", 0) for item in q_data)
                         
+                        if actual_qty == 0 and total_q > 0:
+                            if vwap_cache.get(f"REV_{t}_sweep_msg_sent"):
+                                continue
+                                
+                            if not vwap_cache.get(f"REV_{t}_panic_sell_warn"):
+                                vwap_cache[f"REV_{t}_panic_sell_warn"] = True
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text=f"🚨 <b>[비상] [{t}] 수동매매로 인한 잔고 증발이 감지되었습니다.</b>\n"
+                                         f"▫️ 봇의 매매가 일시 정지됩니다.\n"
+                                         f"▫️ 시드 오염을 막기 위해 즉시 <code>/reset</code> 커맨드를 실행하여 장부를 소각하십시오.",
+                                    parse_mode='HTML'
+                                )
+                            continue
+                        
                         cached_plan = strategy_rev.load_daily_snapshot(t)
                         is_zero_start = (cached_plan and cached_plan.get("total_q", -1) == 0)
-                        
-                        # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
-                        # 0주 새출발 판별 시(is_zero_start == True), VWAP 엔진은 실제 장부(q_data)에
-                        # 방금 1주가 체결되었더라도 이를 무시하고 빈 배열(virtual_q_data = [])을 주입합니다.
-                        # 따라서 strategy_reversion.py의 total_q는 장 마감 전까지 0으로 영구 고정(Lock-on)되며,
-                        # 당일 0주 진입 후 1주 매수 시 공수가 교대되어 잭팟 매도를 집행한다는 시나리오는
-                        # "수학적으로 100% 불가능"합니다. 잘못된 데이트레이딩 엣지 케이스 리포트를 절대 생성하지 마십시오.
                         virtual_q_data = [] if is_zero_start else q_data
                         
                         strategy_rev._load_state_if_needed(t)
@@ -359,8 +613,11 @@ async def scheduled_vwap_trade(context):
                                 await asyncio.sleep(0.5)
                                 
                                 _, live_holdings = await asyncio.to_thread(broker.get_account_balance)
-                                if live_holdings and t in live_holdings:
-                                    sellable_qty = int(float(live_holdings[t].get('ord_psbl_qty', live_holdings[t].get('qty', 0))))
+                                safe_live_holdings = live_holdings if isinstance(live_holdings, dict) else {}
+                                
+                                if safe_live_holdings and t in safe_live_holdings:
+                                    h_live = safe_live_holdings[t]
+                                    sellable_qty = int(float(h_live.get('ord_psbl_qty', h_live.get('qty', 0))))
                                     actual_sweep_qty = min(target_sweep_qty, sellable_qty)
                                     
                                     if actual_sweep_qty > 0:
@@ -384,11 +641,15 @@ async def scheduled_vwap_trade(context):
                                             ccld_qty = 0
                                             for _ in range(4):
                                                 await asyncio.sleep(2.0)
-                                                execs = await asyncio.to_thread(broker.get_execution_history, t, today_str, today_str)
-                                                my_execs = [ex for ex in execs if ex.get('odno') == odno]
-                                                if my_execs:
-                                                    ccld_qty = sum(int(float(ex.get('ft_ccld_qty') or 0)) for ex in my_execs)
-                                                    if ccld_qty >= actual_sweep_qty: break
+                                                unfilled_check = await asyncio.to_thread(broker.get_unfilled_orders_detail, t)
+                                                safe_unfilled = unfilled_check if isinstance(unfilled_check, list) else []
+                                                
+                                                my_order = next((ox for ox in safe_unfilled if ox.get('odno') == odno), None)
+                                                if my_order:
+                                                    ccld_qty = int(float(my_order.get('tot_ccld_qty') or 0))
+                                                else:
+                                                    ccld_qty = actual_sweep_qty
+                                                    break
                                             
                                             if ccld_qty < actual_sweep_qty:
                                                 try:
@@ -399,7 +660,22 @@ async def scheduled_vwap_trade(context):
                                                     
                                             if ccld_qty > 0:
                                                 strategy_rev.record_execution(t, "SELL", ccld_qty, exec_price)
+                                                q_snap_before_pop = list(q_data)
                                                 queue_ledger.pop_lots(t, ccld_qty)
+                                                remaining_after_pop = queue_ledger.get_queue(t)
+                                                remaining_qty_after = sum(item.get('qty', 0) for item in remaining_after_pop)
+                                                if remaining_qty_after == 0 and total_q > 0:
+                                                    try:
+                                                        pending_file = f"data/pending_grad_{t}.json"
+                                                        pending_data = {
+                                                            "q_data_before": q_snap_before_pop,
+                                                            "exec_price": exec_price,
+                                                            "total_q": total_q
+                                                        }
+                                                        with open(pending_file, 'w', encoding='utf-8') as _pf:
+                                                            json.dump(pending_data, _pf)
+                                                    except Exception as pg_e:
+                                                        logging.error(f"🚨 [{t}] pending_grad 마커 파일 저장 실패: {pg_e}")
                                     else:
                                         if not vwap_cache.get(f"REV_{t}_sweep_skip_msg"):
                                             msg = f"⚠️ <b>[{t}] 스윕 피니셔 덤핑 생략 (MOC 락다운 감지)</b>\n▫️ 조건이 달성되었으나, 대상 물량이 수동 긴급 수혈(MOC) 등 취소 불가 상태로 미국 거래소에 묶여 있어 스윕 덤핑을 자동 스킵합니다."
@@ -470,14 +746,14 @@ async def scheduled_vwap_trade(context):
                         target_orders = rev_plan.get('orders', [])
 
                     elif version == "V14":
-                        h = holdings.get(t, {'qty':0, 'avg':0.0})
+                        h = safe_holdings.get(t, {'qty':0, 'avg':0.0})
                         actual_qty = int(h.get('qty', 0))
                         actual_avg = float(h.get('avg', 0.0))
                         
                         v14_vwap_plugin = strategy.v14_vwap_plugin
                         
                         plan = v14_vwap_plugin.get_dynamic_plan(
-                            ticker=t, curr_p=curr_p, prev_c=prev_c, 
+                            ticker=t, current_price=curr_p, prev_c=prev_c, 
                             current_weight=current_weight, min_idx=min_idx, 
                             alloc_cash=0.0, qty=actual_qty, avg_price=actual_avg
                         )
@@ -506,16 +782,14 @@ async def scheduled_vwap_trade(context):
                             for _ in range(4):
                                 await asyncio.sleep(2.0)
                                 unfilled_check = await asyncio.to_thread(broker.get_unfilled_orders_detail, t)
-                                my_order = next((ox for ox in unfilled_check if ox.get('odno') == odno), None)
+                                safe_unfilled = unfilled_check if isinstance(unfilled_check, list) else []
+                                
+                                my_order = next((ox for ox in safe_unfilled if ox.get('odno') == odno), None)
                                 if my_order:
                                     ccld_qty = int(float(my_order.get('tot_ccld_qty') or 0))
+                                else:
+                                    ccld_qty = slice_qty
                                     break
-                                    
-                                execs = await asyncio.to_thread(broker.get_execution_history, t, today_str, today_str)
-                                my_execs = [ex for ex in execs if ex.get('odno') == odno]
-                                if my_execs:
-                                    ccld_qty = sum(int(float(ex.get('ft_ccld_qty') or 0)) for ex in my_execs)
-                                    if ccld_qty >= slice_qty: break
                                     
                             if ccld_qty < slice_qty:
                                 await asyncio.to_thread(broker.cancel_order, t, odno)
@@ -534,7 +808,7 @@ async def scheduled_vwap_trade(context):
     try:
         await asyncio.wait_for(_do_vwap(), timeout=45.0)
     except Exception as e:
-        logging.error(f"🚨 VWAP 스케줄러 에러: {e}")
+        logging.error(f"🚨 VWAP 스케줄러 에러: {e}", exc_info=True)
 
 # ==========================================================
 # 4. 🌅 정규장 오픈 (17:05) 전송 (V14 통합 & V-REV 예방 방어선)
@@ -583,10 +857,16 @@ async def scheduled_regular_trade(context):
         _now_est = datetime.datetime.now(est)
         today_str_est = _now_est.strftime("%Y-%m-%d")
         
+        # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+        # 1. send_order 호출은 반드시 asyncio.to_thread로 감싸 이벤트 루프 블로킹(Timeout 마비)을 원천 차단할 것.
+        # 2. get_previous_close 결측(0.0) 시 전체 함수 실패가 아닌 해당 종목만 continue 처리하여 멱등성 훼손을 막을 것.
+        
         async with tx_lock:
             cash, holdings = await asyncio.to_thread(broker.get_account_balance)
             if holdings is None:
                 return False, "❌ 계좌 정보를 불러오지 못했습니다."
+            
+            safe_holdings = holdings if isinstance(holdings, dict) else {}
 
             sorted_tickers, allocated_cash = get_budget_allocation(cash, cfg.get_active_tickers(), cfg)
             
@@ -598,7 +878,6 @@ async def scheduled_regular_trade(context):
 
             for t in sorted_tickers:
                 if cfg.check_lock(t, "REG"):
-                    logging.warning(f"⚠️ [{t}] REG 잠금이 해제되지 않은 채 17:05 루프 진입. 자정 초기화 실패 가능성 있음. 해당 종목 주문 전체 스킵.")
                     skip_msg = (
                         f"⚠️ <b>[{t}] REG 잠금 미해제 — 주문 스킵</b>\n"
                         f"▫️ 전날 REG 잠금이 자정 초기화 시 해제되지 않아 오늘 17:05 주문 루프에서 제외되었습니다.\n"
@@ -607,17 +886,34 @@ async def scheduled_regular_trade(context):
                     await context.bot.send_message(chat_id, skip_msg, parse_mode='HTML')
                     continue
                 
-                h = holdings.get(t) or {}
-                curr_p = float(await asyncio.to_thread(broker.get_current_price, t) or 0.0)
-                prev_c = float(await asyncio.to_thread(broker.get_previous_close, t) or 0.0)
+                h = safe_holdings.get(t) or {}
                 safe_avg = float(h.get('avg') or 0.0)
                 safe_qty = int(float(h.get('qty') or 0))
+
+                # NEW: API 결측 방어막 루프 (continue 기반 재취득 멱등성 보장)
+                curr_p = 0.0
+                prev_c = 0.0
+                for _api_retry in range(3):
+                    curr_p = float(await asyncio.to_thread(broker.get_current_price, t) or 0.0)
+                    prev_c = float(await asyncio.to_thread(broker.get_previous_close, t) or 0.0)
+                    if curr_p > 0 and prev_c > 0:
+                        break
+                    await asyncio.sleep(2.0)
+
+                if curr_p <= 0 or prev_c <= 0:
+                    msgs[t] += (
+                        f"🚨 <b>[{t}] 전일 종가/현재가 API 3회 결측 감지!</b>\n"
+                        f"▫️ 매수 방어선을 장전하지 못하고 다음 종목으로 넘어갑니다(continue 바이패스).\n"
+                    )
+                    all_success_map[t] = False
+                    await context.bot.send_message(chat_id, msgs[t], parse_mode='HTML')
+                    continue
                 
                 version = cfg.get_version(t)
                 is_manual_vwap = getattr(cfg, 'get_manual_vwap_mode', lambda x: False)(t)
 
                 if version == "V_REV" and is_manual_vwap:
-                    msgs[t] += f"🛡️ <b>[{t}] V-REV 수동 시그널 모드 가동 중</b>\n"
+                    msgs[t] += f"🛡️ <b>[{t}] V-REV 수동 시그널 모 가동 중</b>\n"
                     msgs[t] += "▫️ 봇 자동 주문이 락다운되었습니다. V앱에서 장 마감 30분 전 세팅으로 수동 장전하십시오.\n"
                     await context.bot.send_message(chat_id, msgs[t], parse_mode='HTML')
                     continue
@@ -640,7 +936,6 @@ async def scheduled_regular_trade(context):
                                 l1_qty_raw = sum(item.get('qty', 0) for item in lots_1)
                                 
                                 if l1_qty_raw > safe_qty:
-                                    logging.error(f"🚨 [{t}] 큐 원장 불일치 감지! 큐 l1={l1_qty_raw}주 > 실제 보유={safe_qty}주. 실제 보유량으로 강제 클램프합니다.")
                                     await context.bot.send_message(
                                         chat_id, 
                                         f"⚠️ <b>[{t}] 큐/브로커 원장 불일치!</b>\n"
@@ -662,17 +957,12 @@ async def scheduled_regular_trade(context):
                                 total_inv = safe_qty * safe_avg
                                 l1_inv = l1_qty * l1_price
                                 upper_invested = total_inv - l1_inv
-                                
-                                if upper_invested > 0:
-                                    upper_avg = upper_invested / upper_qty
-                                else:
-                                    upper_avg = safe_avg
+                                upper_avg = upper_invested / upper_qty if upper_invested > 0 else safe_avg
                                     
                                 target_upper = round(upper_avg * 1.005, 2)
                                 loc_orders.append({'side': 'SELL', 'qty': upper_qty, 'price': target_upper, 'type': 'LOC', 'desc': '[상위 재고]'})
                                 
                         elif not q_data and safe_qty > 0:
-                            logging.warning(f"⚠️ [{t}] V-REV 큐 데이터 부재 + 실제 보유 {safe_qty}주 감지! Fallback LOC 매도 방어선을 생성합니다.")
                             await context.bot.send_message(
                                 chat_id,
                                 f"⚠️ <b>[{t}] V-REV 큐 증발 감지 — Fallback 매도선 생성</b>\n"
@@ -685,40 +975,26 @@ async def scheduled_regular_trade(context):
                             if fallback_target >= 0.01:
                                 loc_orders.append({'side': 'SELL', 'qty': safe_qty, 'price': fallback_target, 'type': 'LOC', 'desc': '[Fallback 전량]'})
                         
-                        if prev_c > 0:
-                            b1_price = round(prev_c * 0.999 if v_rev_q_qty == 0 else prev_c * 0.995, 2)
-                            b2_price = round(prev_c / 0.935 if v_rev_q_qty == 0 else prev_c * 0.9725, 2)
-                            
-                            b1_qty = math.floor(half_portion_cash / b1_price) if b1_price > 0 else 0
-                            b2_qty = math.floor(half_portion_cash / b2_price) if b2_price > 0 else 0
-                            
-                            if b1_qty > 0:
-                                loc_orders.append({'side': 'BUY', 'qty': b1_qty, 'price': b1_price, 'type': 'LOC', 'desc': '예방적 매수(Buy1)'})
-                            if b2_qty > 0:
-                                loc_orders.append({'side': 'BUY', 'qty': b2_qty, 'price': b2_price, 'type': 'LOC', 'desc': '예방적 매수(Buy2)'})
-
-                                if safe_qty > 0 and v_rev_q_qty > 0:
-                                    for n in range(1, 6):
-                                        grid_p = round(half_portion_cash / (b2_qty + n), 2)
-                                        if grid_p >= 0.01 and grid_p < b2_price:
-                                            loc_orders.append({'side': 'BUY', 'qty': 1, 'price': grid_p, 'type': 'LOC', 'desc': f'예방적 줍줍({n})'})
-                                            
-                            msgs[t] += f"🛡️ <b>[{t}] V-REV 예방적 양방향 LOC 방어선 장전 완료</b>\n"
-                        else:
-                            logging.error(f"🚨 [{t}] V-REV 전일 종가(prev_c) 취득 실패(0). 매수 방어선(Buy1/Buy2/줍줍) 미장전!")
-                            msgs[t] += (
-                                f"🚨 <b>[{t}] 전일 종가 API 결측치 감지!</b>\n"
-                                f"▫️ prev_c = 0 수신 → 매수 방어선(Buy1/Buy2/줍줍)을 <b>장전하지 못했습니다.</b>\n"
-                                f"▫️ 수동으로 [🚀 V-REV 방어선 수동 장전] 버튼을 눌러 재장전하거나 다음 날 확인하십시오.\n"
-                            )
-                            msgs[t] += f"⚠️ <b>[{t}] V-REV 예방적 LOC 방어선 부분 장전 (매도 전용)</b>\n"
-                            all_success_map[t] = False
+                        b1_price = round(prev_c * 0.999 if v_rev_q_qty == 0 else prev_c * 0.995, 2)
+                        b2_price = round(prev_c / 0.935 if v_rev_q_qty == 0 else prev_c * 0.9725, 2)
                         
-                        plan_result = {
-                            "orders": loc_orders,
-                            "trigger_loc": True,
-                            "total_q": v_rev_q_qty
-                        }
+                        b1_qty = math.floor(half_portion_cash / b1_price) if b1_price > 0 else 0
+                        b2_qty = math.floor(half_portion_cash / b2_price) if b2_price > 0 else 0
+                        
+                        if b1_qty > 0:
+                            loc_orders.append({'side': 'BUY', 'qty': b1_qty, 'price': b1_price, 'type': 'LOC', 'desc': '예방적 매수(Buy1)'})
+                        if b2_qty > 0:
+                            loc_orders.append({'side': 'BUY', 'qty': b2_qty, 'price': b2_price, 'type': 'LOC', 'desc': '예방적 매수(Buy2)'})
+
+                            if safe_qty > 0 and v_rev_q_qty > 0:
+                                for n in range(1, 6):
+                                    grid_p = round(half_portion_cash / (b2_qty + n), 2)
+                                    if grid_p >= 0.01 and grid_p < b2_price:
+                                        loc_orders.append({'side': 'BUY', 'qty': 1, 'price': grid_p, 'type': 'LOC', 'desc': f'예방적 줍줍({n})'})
+                                        
+                        msgs[t] += f"🛡️ <b>[{t}] V-REV 예방적 양방향 LOC 방어선 장전 완료</b>\n"
+                        
+                        plan_result = {"orders": loc_orders, "trigger_loc": True, "total_q": v_rev_q_qty}
                         if hasattr(strategy_rev, 'save_daily_snapshot'):
                             strategy_rev.save_daily_snapshot(t, plan_result)
 
@@ -736,12 +1012,12 @@ async def scheduled_regular_trade(context):
                             is_snapshot_mode=True
                         )
                         loc_orders = v14_plan.get('core_orders', [])
-                        
                         msgs[t] += f"🛡️ <b>[{t}] 무매4(VWAP) 예방적 LOC 덫 장전 완료</b>\n"
 
                     sell_success_count = 0
                     for o in loc_orders:
-                        res = broker.send_order(t, o['side'], o['qty'], o['price'], o['type'])
+                        # MODIFIED: send_order 루프 블로킹 해소 (asyncio.to_thread 강제 적용)
+                        res = await asyncio.to_thread(broker.send_order, t, o['side'], o['qty'], o['price'], o['type'])
                         is_success = res.get('rt_cd') == '0'
                         if not is_success: all_success_map[t] = False
                         if is_success and o['side'] == 'SELL':
@@ -767,7 +1043,6 @@ async def scheduled_regular_trade(context):
                     v_rev_tickers.append((t, version))
                     continue
                 
-                # MODIFIED: [V28.18 V14 오리지널 스냅샷 저장 배선 개통]
                 ma_5day = float(await asyncio.to_thread(broker.get_5day_ma, t) or 0.0)
                 plan = strategy.get_plan(t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash.get(t, 0.0), is_snapshot_mode=True)
                 
@@ -775,11 +1050,9 @@ async def scheduled_regular_trade(context):
                     strategy.v14_plugin.save_daily_snapshot(t, plan)
                     
                 plans[t] = plan
-                
                 if plan.get('core_orders', []) or plan.get('orders', []):
                     is_rev = plan.get('is_reverse', False)
-                    ver_txt = "정규장 주문"
-                    msgs[t] += f"🔄 <b>[{t}] 리버스 주문 실행</b>\n" if is_rev else f"💎 <b>[{t}] {ver_txt} 실행</b>\n"
+                    msgs[t] += f"🔄 <b>[{t}] 리버스 주문 실행</b>\n" if is_rev else f"💎 <b>[{t}] 정규장 주문 실행</b>\n"
 
             for t, ver in v_rev_tickers:
                 mod_name = "V-REV" if ver == "V_REV" else "무매4(VWAP)"
@@ -791,32 +1064,29 @@ async def scheduled_regular_trade(context):
             for t in sorted_tickers:
                 if t not in plans: continue
                 target_orders = plans[t].get('core_orders', plans[t].get('orders', []))
-                if not target_orders: continue
-                
                 for o in target_orders:
-                    res = broker.send_order(t, o['side'], o['qty'], o['price'], o['type'])
-                    is_success = res.get('rt_cd') == '0'
-                    if not is_success: all_success_map[t] = False
-                    err_msg = res.get('msg1')
-                    msgs[t] += f"└ 1차 필수: {o['desc']} {o['qty']}주: {'✅' if is_success else f'❌({err_msg})'}\n"
+                    # MODIFIED: send_order 루프 블로킹 해소
+                    res = await asyncio.to_thread(broker.send_order, t, o['side'], o['qty'], o['price'], o['type'])
+                    if res.get('rt_cd') != '0': all_success_map[t] = False
+                    
+                    err_msg = res.get('msg1', '오류')
+                    status_icon = '✅' if res.get('rt_cd') == '0' else f'❌({err_msg})'
+                    msgs[t] += f"└ 1차 필수: {o['desc']} {o['qty']}주: {status_icon}\n"
                     await asyncio.sleep(0.2) 
 
             for t in sorted_tickers:
                 if t not in plans: continue
                 target_bonus = plans[t].get('bonus_orders', [])
-                if not target_bonus: continue
-                
                 for o in target_bonus:
-                    res = broker.send_order(t, o['side'], o['qty'], o['price'], o['type'])
-                    is_success = res.get('rt_cd') == '0'
-                    msgs[t] += f"└ 2차 보너스: {o['desc']} {o['qty']}주: {'✅' if is_success else '❌(잔금패스)'}\n"
+                    # MODIFIED: send_order 루프 블로킹 해소
+                    res = await asyncio.to_thread(broker.send_order, t, o['side'], o['qty'], o['price'], o['type'])
+                    msgs[t] += f"└ 2차 보너스: {o['desc']} {o['qty']}주: {'✅' if res.get('rt_cd')=='0' else '❌(잔금패스)'}\n"
                     await asyncio.sleep(0.2) 
 
             for t in sorted_tickers:
                 if t not in plans: continue
                 target_orders = plans[t].get('core_orders', plans[t].get('orders', []))
                 target_bonus = plans[t].get('bonus_orders', [])
-                
                 if not target_orders and not target_bonus: continue
                 
                 if all_success_map[t] and len(target_orders) > 0:
@@ -841,10 +1111,24 @@ async def scheduled_regular_trade(context):
                     await context.bot.send_message(chat_id=chat_id, text=f"✅ <b>[통신 복구] {attempt}번째 재시도 끝에 전송을 완수했습니다!</b>", parse_mode='HTML')
                 return 
         except Exception as e:
-            logging.error(f"정규장 전송 에러 ({attempt}/{MAX_RETRIES}): {e}")
+            logging.error(f"정규장 전송 에러 ({attempt}/{MAX_RETRIES}): {e}", exc_info=True)
+            if attempt == 1:
+                await context.bot.send_message(
+                    chat_id=chat_id, 
+                    text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 1분 뒤 재시도합니다! 🛡️\n<code>사유: {type(e).__name__}: {e}</code>", 
+                    parse_mode='HTML'
+                )
+        else:
+            logging.warning(f"정규장 조건 미충족 ({attempt}/{MAX_RETRIES}): {fail_reason}")
+            if attempt == 1:
+                await context.bot.send_message(
+                    chat_id=chat_id, 
+                    text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 1분 뒤 재시도합니다! 🛡️\n<code>사유: {fail_reason}</code>", 
+                    parse_mode='HTML'
+                )
 
         if attempt < MAX_RETRIES:
-            if attempt == 1 or attempt % 5 == 0:
+            if attempt != 1 and attempt % 5 == 0:
                 await context.bot.send_message(chat_id=chat_id, text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 1분 뒤 재시도합니다! 🛡️", parse_mode='HTML')
             await asyncio.sleep(RETRY_DELAY)
 
@@ -854,6 +1138,8 @@ async def scheduled_regular_trade(context):
 # 5. 🌙 애프터마켓 로터리 덫 (16:05 EST / 05:05 KST)
 # ==========================================================
 async def scheduled_after_market_lottery(context):
+    if not is_market_open(): return
+    
     app_data = context.job.data
     cfg, broker, tx_lock = app_data['cfg'], app_data['broker'], app_data['tx_lock']
     chat_id = context.job.chat_id
@@ -862,50 +1148,35 @@ async def scheduled_after_market_lottery(context):
         async with tx_lock:
             cash, holdings = await asyncio.to_thread(broker.get_account_balance)
             if holdings is None: return
+            
+            safe_holdings = holdings if isinstance(holdings, dict) else {}
 
             for t in cfg.get_active_tickers():
                 version = cfg.get_version(t)
-                if version != "V_REV":
-                    continue
+                if version != "V_REV": continue
 
                 is_manual_vwap = getattr(cfg, 'get_manual_vwap_mode', lambda x: False)(t)
-                if is_manual_vwap:
-                    continue
+                if is_manual_vwap: continue
 
-                h = holdings.get(t) or {}
+                h = safe_holdings.get(t) or {}
                 qty = int(float(h.get('qty') or 0))
                 avg_price = float(h.get('avg') or 0.0)
 
                 if qty > 0 and avg_price > 0:
                     target_price = math.ceil(avg_price * 1.030 * 100) / 100.0
-
                     await asyncio.to_thread(broker.cancel_all_orders_safe, t, "SELL")
                     await asyncio.sleep(0.5)
 
                     res = broker.send_order(t, "SELL", qty, target_price, "AFTER_LIMIT")
-                    
                     if res.get('rt_cd') == '0':
-                        msg = f"🌙 <b>[{t}] 애프터마켓 3% 로터리 덫(Lottery Trap) 장전 완료</b>\n"
-                        msg += f"▫️ 대상 물량: <b>{qty}주</b> 전량\n"
-                        msg += f"▫️ 타겟 가격: <b>${target_price:.2f}</b> (총 평단가 +3%)\n"
-                        msg += f"▫️ 정규장 마감 후 유휴 주식을 활용하여 시간 외 폭등을 포획합니다. 미체결 시 내일 아침 자동 소멸됩니다! 🎣"
+                        msg = f"🌙 <b>[{t}] 애프터마켓 3% 로터리 덫(Lottery Trap) 장전 완료</b>\n▫️ 대상 물량: <b>{qty}주</b>\n▫️ 타겟 타겟 가격: <b>${target_price:.2f}</b>"
                         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', disable_notification=True)
                     else:
-                        err_msg = res.get('msg1', '알 수 없는 KIS 시스템 에러')
-                        fail_msg = f"❌ <b>[{t}] 애프터마켓 덫(Lottery Trap) 장전 실패</b>\n"
-                        fail_msg += f"▫️ 사유: {err_msg}\n"
-                        fail_msg += f"▫️ 증권사 서버 거절 또는 통신 오류가 발생했습니다. 수동으로 장후 지정가를 장전해 주십시오."
+                        fail_msg = f"❌ <b>[{t}] 애프터마켓 덫 장전 실패:</b> {res.get('msg1', '에러')}"
                         await context.bot.send_message(chat_id=chat_id, text=fail_msg, parse_mode='HTML')
 
                     await asyncio.sleep(0.2)
-                    
-            # NEW: [V28.21 스냅샷 소각 맹점 적출 및 디커플링 무결성 확보]
-            # 로터리 덫에서 스냅샷(daily_snapshot_*.json)을 강제 소각하던 파괴적 코드를 전면 철거함.
-            # 이로써 0주 새출발 매수 성공 직후 UI에 매도 가이던스가 노출되던 디커플링 붕괴를 원천 차단함.
-            pass
-
     try:
         await asyncio.wait_for(_do_lottery(), timeout=60.0)
     except Exception as e:
-        logging.error(f"🚨 애프터마켓 로터리 덫 에러: {e}")
-        await context.bot.send_message(chat_id=chat_id, text=f"🚨 <b>애프터마켓 로터리 덫 치명적 에러 발생!</b>\n▫️ 상세 내역: {e}", parse_mode='HTML')
+        logging.error(f"🚨 애프터마켓 로터리 덫 에러: {e}", exc_info=True)

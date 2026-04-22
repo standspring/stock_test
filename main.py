@@ -8,7 +8,7 @@
 # 🚨 [V25.19 핫픽스] EST/KST 타임존 혼용에 따른 스케줄링 오작동 방어 (명시적 타임존 주입)
 # 🚨 [V25.19 핫픽스] 듀얼 레퍼런싱(TICKER_BASE_MAP) 전역 공유 파이프라인 완벽 확립
 # 🚀 [V27.00 자가 업데이트 라우터 이식] 텔레그램 핸들러 루프에 'update' 명령어 공식 등록 완료
-# 🚨 [V27.11 그랜드 수술] 코파일럿 합작 - asyncio.Lock 런타임 붕괴 방어, NaN 오판 및 역방향 폴백 차단,
+# 🚨 [V27.11 그랜드 수술] 코파일럿 합작 - asyncio.Lock 런타임 붕괴 방어, NaN 오판 및 역방향 폴백 차단, 
 # 콜드 스타트 폭풍 제어(first=30) 및 통합 타임존(America/New_York) 파이프라인 구축
 # 🚨 [V27.12 핫픽스] 사계절 타임존 이중 타격 원천 차단, 이중 동기화 붕괴 방지 및 FD 최적화 이식
 # MODIFIED: [V28.27 그랜드 수술] 로그 파일명 생성 시 KST(서버 시간) 의존성 전면 소각 및 EST(미국 동부) 타임존 락온으로 디버깅 파편화 영구 차단
@@ -25,7 +25,6 @@ from dotenv import load_dotenv
 
 from config import ConfigManager
 from broker import KoreaInvestmentBroker
-from paper_broker import PaperBroker
 from strategy import InfiniteStrategy
 from telegram_bot import TelegramController
 
@@ -46,8 +45,8 @@ from scheduler_trade import (
     scheduled_regular_trade,
     scheduled_sniper_monitor,
     scheduled_vwap_trade,
-    scheduled_vwap_init_and_cancel,
-    scheduled_after_market_lottery
+    scheduled_vwap_init_and_cancel,  
+    scheduled_after_market_lottery  
 )
 
 TICKER_BASE_MAP = {
@@ -61,7 +60,7 @@ TICKER_BASE_MAP = {
 if not os.path.exists('data'): os.makedirs('data')
 if not os.path.exists('logs'): os.makedirs('logs')
 
-load_dotenv()
+load_dotenv() 
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 try:
@@ -73,8 +72,6 @@ APP_KEY = os.getenv("APP_KEY")
 APP_SECRET = os.getenv("APP_SECRET")
 CANO = os.getenv("CANO")
 ACNT_PRDT_CD = os.getenv("ACNT_PRDT_CD", "01")
-BROKER_MODE = str(os.getenv("BROKER_MODE", "LIVE") or "LIVE").strip().upper()
-PAPER_START_CASH = float(os.getenv("PAPER_START_CASH", "100000") or 100000)
 
 # 🚨 [수술 완료] ADMIN_CHAT_ID 누락 시 묵언수행(Silent Zombie) 봇 구동 원천 차단
 if not all([TELEGRAM_TOKEN, APP_KEY, APP_SECRET, CANO, ADMIN_CHAT_ID]):
@@ -86,7 +83,7 @@ est_tz_log = pytz.timezone('US/Eastern')
 log_filename = f"logs/bot_app_{datetime.datetime.now(est_tz_log).strftime('%Y%m%d')}.log"
 
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
     level=logging.INFO,
     handlers=[
         logging.FileHandler(log_filename, encoding='utf-8'),
@@ -102,37 +99,37 @@ async def scheduled_volatility_scan(context):
     app_data = context.job.data
     cfg = app_data['cfg']
     base_map = app_data.get('base_map', TICKER_BASE_MAP)
-
+    
     print("\n" + "=" * 60)
     print("📈 [자율주행 변동성 스캔 완료] (10:20 EST 스냅샷)")
-
+    
     active_tickers = cfg.get_active_tickers()
-
+            
     if not active_tickers:
         print("📊 현재 운용 중인 종목이 없습니다.")
     else:
         briefing_lines = []
         vol_engine = VolatilityEngine()
-
+        
         for ticker in active_tickers:
             target_base = base_map.get(ticker, ticker)
             try:
                 weight_data = await asyncio.to_thread(vol_engine.calculate_weight, target_base)
                 raw_weight = weight_data.get('weight', 1.0) if isinstance(weight_data, dict) else weight_data
                 real_weight = float(raw_weight)
-
+                
                 # 🚨 [수술 완료] NaN/Inf 결측치 침투 시 무조건 중립(1.0) 폴백 적용하여 공격 오판 원천 차단
                 if not math.isfinite(real_weight):
                     raise ValueError(f"비정상 수학 수치 산출: {real_weight}")
             except Exception as e:
                 # 🚨 [수술 완료] 에러 시 역방향 배팅(0.85/1.15) 금지. 무조건 중립(1.0) 안전마진 강제 적용
                 logging.warning(f"[{ticker}] 변동성 지표 산출 실패. 중립 안전마진(1.0) 강제 적용: {e}")
-                real_weight = 1.0
-
+                real_weight = 1.0 
+                
             status_text = "OFF 권장" if real_weight <= 1.0 else "ON 권장"
             if ticker != target_base: briefing_lines.append(f"{ticker}({target_base}): {real_weight:.2f} ({status_text})")
             else: briefing_lines.append(f"{ticker}: {real_weight:.2f} ({status_text})")
-
+            
         print(f"📊 [자율주행 지표] {' | '.join(briefing_lines)} (상세 게이지: /mode)")
     print("=" * 60 + "\n")
 
@@ -145,17 +142,17 @@ async def post_init(application: Application):
 def main():
     TARGET_HOUR, season_msg = get_target_hour()
     cfg = ConfigManager()
-    latest_version = cfg.get_latest_version()
-
+    latest_version = cfg.get_latest_version() 
+    
     print("=" * 60)
     print(f"🚀 앱솔루트 스노우볼 퀀트 엔진 {latest_version} (초경량 2대 코어 아키텍처 탑재)")
     print(f"📅 날짜 정보: {season_msg}")
     print(f"⏰ 자동 동기화: 08:30(여름) / 09:30(겨울) 자동 변경")
     print(f"🛡️ 1-Tier 자율주행 지표 스캔 대기 중... (매일 10:20 EST 격발)")
     print("=" * 60)
-
+    
     perform_self_cleaning()
-
+    
     # 상단에서 ADMIN_CHAT_ID 유효성 검사를 마쳤으므로 무조건 세팅
     cfg.set_chat_id(ADMIN_CHAT_ID)
 
@@ -167,20 +164,20 @@ def main():
     strategy = InfiniteStrategy(cfg)
     queue_ledger = QueueLedger()
     strategy_rev = ReversionStrategy()
-
+    
     # 🚨 [수술 완료] tx_lock은 동기 함수인 main()이 아닌 비동기 post_init에서 생성됩니다.
     bot = TelegramController(
-        cfg, broker, strategy, tx_lock=None,
+        cfg, broker, strategy, tx_lock=None, 
         queue_ledger=queue_ledger, strategy_rev=strategy_rev
     )
-
+    
     # 🚨 [수술 완료] IANA 표준 타임존 파이프라인 확립
     kst = pytz.timezone('Asia/Seoul')
     est = pytz.timezone('America/New_York')
-
+    
     app_data = {
-        'cfg': cfg, 'broker': broker, 'strategy': strategy,
-        'queue_ledger': queue_ledger, 'strategy_rev': strategy_rev,
+        'cfg': cfg, 'broker': broker, 'strategy': strategy, 
+        'queue_ledger': queue_ledger, 'strategy_rev': strategy_rev,  
         'bot': bot, 'tx_lock': None, 'base_map': TICKER_BASE_MAP,
         'tz_kst': kst, 'tz_est': est # 타임존 전역 공유
     }
@@ -197,51 +194,51 @@ def main():
         .post_init(post_init) # 🚨 Lock 생성을 위한 훅 연결
         .build()
     )
-
+    
     app.bot_data['app_data'] = app_data
     app.bot_data['bot_controller'] = bot
-
+    
     for cmd, handler in [
         ("start", bot.cmd_start), ("paper", bot.cmd_paper), ("record", bot.cmd_record), ("history", bot.cmd_history),
-        ("sync", bot.cmd_sync), ("settlement", bot.cmd_settlement), ("seed", bot.cmd_seed),
-        ("ticker", bot.cmd_ticker), ("mode", bot.cmd_mode), ("reset", bot.cmd_reset),
+        ("sync", bot.cmd_sync), ("settlement", bot.cmd_settlement), ("seed", bot.cmd_seed), 
+        ("ticker", bot.cmd_ticker), ("mode", bot.cmd_mode), ("reset", bot.cmd_reset), 
         ("version", bot.cmd_version), ("update", bot.cmd_update)
     ]:
         app.add_handler(CommandHandler(cmd, handler))
-
+        
     app.add_handler(CallbackQueryHandler(bot.handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
-
+    
     jq = app.job_queue
-
+    
     # 1. 시스템 관리 스케줄러 (core)
     for tt in [datetime.time(7,0,tzinfo=kst), datetime.time(11,0,tzinfo=kst), datetime.time(16,30,tzinfo=kst), datetime.time(22,0,tzinfo=kst)]:
         jq.run_daily(scheduled_token_check, time=tt, days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
-
+    
     # MODIFIED: [이중 잔고 동기화 방어] 사계절(TARGET_HOUR) 기준에 맞춰 여름/겨울 동기화 스케줄을 단 하나만 등록
     SYNC_HOUR = 8 if TARGET_HOUR == 17 else 9
     SYNC_FUNC = scheduled_auto_sync_summer if TARGET_HOUR == 17 else scheduled_auto_sync_winter
     jq.run_daily(SYNC_FUNC, time=datetime.time(SYNC_HOUR, 30, tzinfo=kst), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
-
+    
     # MODIFIED: [이중 타격 방어] 17시/18시가 무조건 모두 등록되는 버그를 제거하고 TARGET_HOUR 단일 슬롯에만 락 초기화 등록
     jq.run_daily(scheduled_force_reset, time=datetime.time(TARGET_HOUR, 0, tzinfo=kst), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
-
+        
     jq.run_daily(scheduled_volatility_scan, time=datetime.time(10, 20, tzinfo=est), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
-
+    
     # 2. 실전 전투 매매 스케줄러 (trade)
     # MODIFIED: [이중 타격 방어] 17:05/18:05 동시 발사(Double-buying) 버그를 원천 차단하고 TARGET_HOUR에만 정규장 타격 스케줄 등록
     jq.run_daily(scheduled_regular_trade, time=datetime.time(TARGET_HOUR, 5, tzinfo=kst), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
-
+    
     jq.run_daily(scheduled_vwap_init_and_cancel, time=datetime.time(15, 30, tzinfo=est), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
 
     # 🚨 [수술 완료] 콜드 스타트 폭풍 방어: 봇 구동 후 30초 뒤 첫 실행(first=30)
     jq.run_repeating(scheduled_sniper_monitor, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)
     jq.run_repeating(scheduled_vwap_trade, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)
-
+    
     jq.run_daily(scheduled_after_market_lottery, time=datetime.time(16, 5, tzinfo=est), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
 
     jq.run_daily(scheduled_self_cleaning, time=datetime.time(6, 0, tzinfo=kst), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
-
+        
     app.run_polling()
 
 if __name__ == "__main__":

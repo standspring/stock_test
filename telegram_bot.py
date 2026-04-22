@@ -39,6 +39,7 @@ from telegram_view import TelegramView
 from telegram_sync_engine import TelegramSyncEngine
 from telegram_states import TelegramStates
 from telegram_callbacks import TelegramCallbacks
+from paper_broker import PaperBroker
 
 class TelegramController:
     def __init__(self, config, broker, strategy, tx_lock=None, queue_ledger=None, strategy_rev=None):
@@ -236,6 +237,45 @@ class TelegramController:
         except Exception as e:
             safe_err = html.escape(str(e))
             await status_msg.edit_text(f"🚨 <b>[치명적 오류]</b> 플러그인 호출 및 프로세스 예외 발생: {safe_err}", parse_mode='HTML')
+
+    async def cmd_paper(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update):
+            return
+
+        is_paper = isinstance(self.broker, PaperBroker)
+        mode_txt = "PAPER" if is_paper else "REAL"
+
+        async with self.tx_lock:
+            cash, holdings = await asyncio.to_thread(self.broker.get_account_balance)
+
+        safe_holdings = holdings if isinstance(holdings, dict) else {}
+        holding_count = len([1 for h in safe_holdings.values() if int(float((h or {}).get("qty", 0) or 0)) > 0])
+
+        msg = f"<b>[Broker Status]</b>\n"
+        msg += f"Mode: <b>{mode_txt}</b>\n"
+        msg += f"Cash: <b>${float(cash or 0.0):,.2f}</b>\n"
+        msg += f"Holdings: <b>{holding_count}</b>"
+
+        if is_paper:
+            open_orders = []
+            for ticker in self.cfg.get_active_tickers():
+                try:
+                    orders = await asyncio.to_thread(self.broker.get_unfilled_orders_detail, ticker)
+                except Exception:
+                    orders = []
+                safe_orders = orders if isinstance(orders, list) else []
+                for order in safe_orders:
+                    side_txt = "BUY" if order.get("sll_buy_dvsn_cd") == "02" else "SELL"
+                    open_orders.append(
+                        f"{ticker} {side_txt} {order.get('ord_qty', '0')} @ ${order.get('ord_unpr', '0')} ({order.get('ord_dvsn_cd', '?')})"
+                    )
+
+            msg += f"\nOpen close-orders: <b>{len(open_orders)}</b>"
+            if open_orders:
+                msg += "\n\n"
+                msg += "\n".join(html.escape(line) for line in open_orders[:10])
+
+        await update.message.reply_text(msg, parse_mode='HTML')
 
     async def cmd_queue(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update):

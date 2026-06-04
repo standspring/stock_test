@@ -1,2 +1,5 @@
 pandas
 yfinance
+Flask
+requests
+beautifulsoup4

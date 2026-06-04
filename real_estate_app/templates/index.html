@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Apartment Price Tracker</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="toolbar" aria-label="조회 조건">
+        <div>
+          <p class="eyebrow">Real Estate Monitor</p>
+          <h1>아파트 가격 추이</h1>
+        </div>
+        <label>
+          <span>단지</span>
+          <select id="apartmentSelect">
+            {% for apartment in apartments %}
+              <option value="{{ apartment }}">{{ apartment }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </section>
+
+      <section class="summary-grid" aria-label="요약">
+        <article>
+          <span>최근 가격</span>
+          <strong id="latestPrice">-</strong>
+        </article>
+        <article>
+          <span>기간 등락</span>
+          <strong id="changePct">-</strong>
+        </article>
+        <article>
+          <span>데이터 수</span>
+          <strong id="pointCount">-</strong>
+        </article>
+      </section>
+
+      <section class="chart-panel">
+        <canvas id="priceChart" height="120"></canvas>
+      </section>
+
+      <section class="table-panel">
+        <table>
+          <thead>
+            <tr>
+              <th>일자</th>
+              <th>출처</th>
+              <th>면적</th>
+              <th>가격</th>
+              <th>비고</th>
+            </tr>
+          </thead>
+          <tbody id="priceRows"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>

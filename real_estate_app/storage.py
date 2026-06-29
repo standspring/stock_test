@@ -93,11 +93,11 @@ def seed_demo_data(conn: sqlite3.Connection) -> int:
         return 0
 
     points = [
-        PricePoint("sample", "래미안 원베일리", date(2025, 9, 1), 3_980_000_000, 84.95, note="샘플 데이터"),
-        PricePoint("sample", "래미안 원베일리", date(2025, 11, 1), 4_120_000_000, 84.95, note="샘플 데이터"),
-        PricePoint("sample", "래미안 원베일리", date(2026, 1, 1), 4_050_000_000, 84.95, note="샘플 데이터"),
-        PricePoint("sample", "래미안 원베일리", date(2026, 3, 1), 4_260_000_000, 84.95, note="샘플 데이터"),
-        PricePoint("sample", "래미안 원베일리", date(2026, 5, 1), 4_330_000_000, 84.95, note="샘플 데이터"),
+        PricePoint("sample", "망아캐1", date(2025, 9, 1), 3_980_000_000, 84.95, note="샘플 데이터"),
+        PricePoint("sample", "망아캐1", date(2025, 11, 1), 4_120_000_000, 84.95, note="샘플 데이터"),
+        PricePoint("sample", "망아캐1", date(2026, 1, 1), 4_050_000_000, 84.95, note="샘플 데이터"),
+        PricePoint("sample", "망아캐1", date(2026, 3, 1), 4_260_000_000, 84.95, note="샘플 데이터"),
+        PricePoint("sample", "망아캐1", date(2026, 5, 1), 4_330_000_000, 84.95, note="샘플 데이터"),
     ]
     return save_price_points(conn, points)
 

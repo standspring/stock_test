@@ -23,11 +23,11 @@ python run_real_estate_server.py
 
 ```csv
 source,apartment_name,observed_date,price_krw,area_m2,trade_type,floor,note
-csv,래미안 원베일리,2026-06-01,4380000000,84.95,sale,중층,사용자 CSV 예시
+csv,망아캐1,2026-06-01,4380000000,84.95,sale,중층,사용자 CSV 예시
 ```
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5000/api/import-csv -Body @{ apartment_name = "래미안 원베일리"; path = "data/apartment_prices.csv"; password = "원하는-비밀번호" }
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5000/api/import-csv -Body @{ apartment_name = "망아캐1"; path = "data/apartment_prices.csv"; password = "원하는-비밀번호" }
 ```
 
 ## 매일 오전 10시 수집

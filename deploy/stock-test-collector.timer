@@ -1,0 +1,10 @@
+[Unit]
+Description=Run apartment price collector every day at 10:00
+
+[Timer]
+OnCalendar=*-*-* 10:00:00
+Persistent=true
+Unit=stock-test-collector.service
+
+[Install]
+WantedBy=timers.target

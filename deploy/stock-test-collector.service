@@ -1,0 +1,10 @@
+[Unit]
+Description=Collect apartment price data
+After=network.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/apps/stock_test
+Environment="PATH=/home/ubuntu/apps/stock_test/.venv/bin"
+ExecStart=/home/ubuntu/apps/stock_test/.venv/bin/python -m real_estate_app.collect_prices --source csv

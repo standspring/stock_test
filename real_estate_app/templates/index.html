@@ -24,6 +24,52 @@
         </label>
       </section>
 
+      <section class="entry-panel" aria-labelledby="entryTitle">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Manual Entry</p>
+            <h2 id="entryTitle">가격 직접 입력</h2>
+          </div>
+          <p id="entryMessage" class="entry-message" role="status"></p>
+        </div>
+        <form id="priceForm" class="price-form">
+          <label>
+            <span>단지명 *</span>
+            <input id="apartmentName" name="apartment_name" required list="apartmentNames">
+            <datalist id="apartmentNames">
+              {% for apartment in apartments %}
+                <option value="{{ apartment }}"></option>
+              {% endfor %}
+            </datalist>
+          </label>
+          <label>
+            <span>기준일 *</span>
+            <input id="observedDate" name="observed_date" type="date" required>
+          </label>
+          <label>
+            <span>가격(원) *</span>
+            <input name="price_krw" type="number" min="1" step="1" placeholder="예: 4330000000" required>
+          </label>
+          <label>
+            <span>전용면적(㎡)</span>
+            <input name="area_m2" type="number" min="0.01" step="0.01" placeholder="예: 84.95">
+          </label>
+          <label>
+            <span>층</span>
+            <input name="floor" placeholder="예: 15층">
+          </label>
+          <label>
+            <span>비고</span>
+            <input name="note" placeholder="선택 입력">
+          </label>
+          <label>
+            <span>입력 비밀번호 *</span>
+            <input name="password" type="password" autocomplete="current-password" required>
+          </label>
+          <button type="submit">가격 저장</button>
+        </form>
+      </section>
+
       <section class="summary-grid" aria-label="요약">
         <article>
           <span>최근 가격</span>

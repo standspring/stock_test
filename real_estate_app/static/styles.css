@@ -45,7 +45,8 @@ label {
   font-weight: 700;
 }
 
-select {
+select,
+input {
   min-height: 44px;
   border: 1px solid #c8cec9;
   border-radius: 6px;
@@ -53,6 +54,63 @@ select {
   background: #fff;
   color: #202522;
   font-size: 15px;
+}
+
+.entry-panel {
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid #dde0dc;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.price-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+
+.price-form label {
+  min-width: 0;
+}
+
+.price-form button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 6px;
+  background: #1f7a5f;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.entry-message {
+  min-height: 20px;
+  margin: 0;
+  color: #68706b;
+}
+
+.entry-message[data-state="success"] {
+  color: #1f7a5f;
+}
+
+.entry-message[data-state="error"] {
+  color: #b83a37;
 }
 
 .summary-grid {
@@ -137,6 +195,14 @@ td:nth-child(4) {
   }
 
   .summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .panel-heading {
+    display: block;
+  }
+
+  .price-form {
     grid-template-columns: 1fr;
   }
 }
